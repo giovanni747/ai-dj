@@ -78,10 +78,11 @@ export function AIInputWithLoading({
               id={id}
               placeholder=""
               className={cn(
-                "bg-white w-full rounded-3xl pl-6 pr-10 py-4",
-                "border-none ring-0 focus:ring-0 focus:outline-none",
-                "text-gray-900 resize-none text-wrap leading-normal break-word",
-                "flex items-center shadow-lg",
+                "w-full rounded-3xl pl-6 pr-10 py-4",
+                "bg-white/5 text-white backdrop-blur-2xl border border-white/10",
+                "ring-0 focus:ring-2 focus:ring-white/10 focus:outline-none",
+                "resize-none text-wrap leading-normal break-word",
+                "flex items-center",
                 `min-h-[${minHeight}px]`
               )}
               data-caret-width="3"
@@ -123,7 +124,7 @@ export function AIInputWithLoading({
                   waitTime={3000}
                   deleteSpeed={40}
                   loop={true}
-                  className="text-gray-500 text-sm"
+                  className="text-white/50 text-sm"
                   cursorChar="|"
                 />
               </div>
@@ -132,21 +133,21 @@ export function AIInputWithLoading({
           <button
             onClick={handleSubmit}
             className={cn(
-              "absolute right-3 top-1/2 -translate-y-1/2 rounded-xl py-1 px-1",
-              submitted ? "bg-none" : "bg-gray-200"
+              "absolute right-3 top-1/2 -translate-y-1/2 rounded-xl py-1 px-1 border",
+              submitted ? "bg-none border-transparent" : "bg-white/10 border-white/20 backdrop-blur-md"
             )}
             type="button"
             disabled={submitted}
           >
             {submitted ? (
               <div
-                className="w-4 h-4 bg-gray-700 rounded-sm animate-spin transition duration-700"
+                className="w-4 h-4 bg-white/70 rounded-sm animate-spin transition duration-700"
                 style={{ animationDuration: "3s" }}
               />
             ) : (
               <CornerRightUp
                 className={cn(
-                  "w-4 h-4 transition-opacity text-gray-700",
+                  "w-4 h-4 transition-opacity text-white",
                   inputValue ? "opacity-100" : "opacity-30"
                 )}
               />
