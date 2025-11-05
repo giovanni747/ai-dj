@@ -4,14 +4,17 @@ import { motion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
 import type { SpotifyTrack } from "@/types";
 import { formatDuration, getAlbumArt } from "@/lib/track-utils";
-import { ExternalLink, Play, Pause, Music } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ExternalLink, Play, Pause, Music, Heart } from "lucide-react";
 
 interface TrackListProps {
   tracks: SpotifyTrack[];
   className?: string;
+  likedTracks?: Set<string>;
+  onToggleLike?: (trackId: string) => void;
 }
 
-export function TrackList({ tracks, className = "" }: TrackListProps) {
+export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike }: TrackListProps) {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -160,6 +163,27 @@ export function TrackList({ tracks, className = "" }: TrackListProps) {
             <div className="shrink-0 text-xs text-white/40">
               {formatDuration(track.duration_ms)}
             </div>
+
+            {/* Heart Button */}
+            {onToggleLike && (
+              <button
+                className="shrink-0 p-1 hover:scale-110 active:scale-95 transition-transform"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleLike(track.id);
+                }}
+                aria-label={likedTracks.has(track.id) ? "Unlike track" : "Like track"}
+              >
+                <Heart
+                  className={cn(
+                    "w-4 h-4 transition-colors",
+                    likedTracks.has(track.id)
+                      ? "text-red-500 fill-red-500"
+                      : "text-white/40 hover:text-red-400"
+                  )}
+                />
+              </button>
+            )}
 
             {/* Spotify Link */}
             <a

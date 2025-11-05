@@ -12,6 +12,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheHandler
 from ai_service import GroqRecommendationService
 from db import store_token, get_token, delete_token
+from chat_db import chat_db
 
 
 env_path = Path(__file__).parent.parent / '.env'
@@ -26,12 +27,15 @@ if DEV_MODE:
     print("⚠️  WARNING: Running in DEV_MODE - using mock data for restricted accounts")
 
 # Enable CORS for Next.js frontend
-CORS(app, supports_credentials=True, origins=['http://localhost:3000', 'http://127.0.0.1:3000']) 
+CORS(app, supports_credentials=True, origins=['http://127.0.0.1:3000', 'http://localhost:3000']) 
 
 client_id = os.getenv("CLIENT_ID").strip()  # Remove any whitespace
 client_secret = os.getenv("CLIENT_SECRET").strip()
-redirect_url = "http://127.0.0.1:5001/callback"
-nextjs_url = "http://localhost:3000"  # Next.js frontend URL
+# Redirect URI - must match EXACTLY what's set in Spotify Developer Dashboard
+# Use environment variable if set, otherwise default to 127.0.0.1
+redirect_url = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5001/callback")
+nextjs_url = "http://127.0.0.1:3000"  # Next.js frontend URL
+
 scope = 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played playlist-modify-public playlist-modify-private'
 
 # Use database-based cache handler
@@ -970,15 +974,251 @@ def dj_recommend():
         conversation_history.append({"role": "assistant", "content": dj_intro})
         session['conversation_history'] = conversation_history[-10:]
         
+        # Save messages to database
+        user_message_db_id = None
+        assistant_message_db_id = None
+        
+        if chat_db:
+            try:
+                # Get user ID
+                user = sp.current_user()
+                user_id = user['id']
+                session_id = get_session_id()
+                
+                # Save user message
+                user_message_db_id = chat_db.save_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    role='user',
+                    content=user_message,
+                    tracks=None
+                )
+                
+                # Save assistant message with tracks
+                assistant_message_db_id = chat_db.save_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    role='assistant',
+                    content=dj_intro,
+                    tracks=tracks
+                )
+                
+                print(f"✅ Saved messages to database (user: {user_message_db_id}, assistant: {assistant_message_db_id})")
+            except Exception as e:
+                print(f"⚠️  Failed to save messages to database: {e}")
+        
         return jsonify({
             "dj_response": dj_intro,
             "tracks": tracks,
-            "total_tracks": len(tracks)
+            "total_tracks": len(tracks),
+            "user_message_db_id": user_message_db_id,
+            "assistant_message_db_id": assistant_message_db_id
         })
     except Exception as e:
         print(f"Error in dj_recommend: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# === CHAT HISTORY & LIKES ENDPOINTS ===
+
+@app.route('/message_feedback', methods=['POST'])
+def message_feedback():
+    """Save or update message feedback (like/dislike)"""
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        return redirect_response
+    
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        data = request.json
+        message_id = data.get('message_id')
+        feedback_type = data.get('feedback_type')  # 'like', 'dislike', or None to remove
+        
+        if not message_id:
+            return jsonify({"error": "message_id is required"}), 400
+        
+        user = sp.current_user()
+        user_id = user['id']
+        
+        if feedback_type is None or feedback_type == '':
+            # Remove feedback
+            success = chat_db.remove_message_feedback(message_id, user_id)
+        elif feedback_type in ['like', 'dislike']:
+            # Save feedback
+            success = chat_db.save_message_feedback(message_id, user_id, feedback_type)
+        else:
+            return jsonify({"error": "feedback_type must be 'like', 'dislike', or null"}), 400
+        
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Failed to save feedback"}), 500
+            
+    except Exception as e:
+        print(f"Error in message_feedback: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/track_like', methods=['POST'])
+def track_like():
+    """Toggle track like (add or remove)"""
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        return redirect_response
+    
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        data = request.json
+        track_id = data.get('track_id')
+        track_name = data.get('track_name')
+        track_artist = data.get('track_artist')
+        track_image_url = data.get('track_image_url')
+        
+        if not track_id or not track_name or not track_artist:
+            return jsonify({"error": "track_id, track_name, and track_artist are required"}), 400
+        
+        user = sp.current_user()
+        user_id = user['id']
+        
+        is_liked = chat_db.toggle_track_like(
+            user_id=user_id,
+            track_id=track_id,
+            track_name=track_name,
+            track_artist=track_artist,
+            track_image_url=track_image_url
+        )
+        
+        if is_liked is not None:
+            return jsonify({"success": True, "liked": is_liked})
+        else:
+            return jsonify({"error": "Failed to toggle track like"}), 500
+            
+    except Exception as e:
+        print(f"Error in track_like: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/chat_history', methods=['GET'])
+def get_chat_history():
+    """Get chat history for the current user"""
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        return redirect_response
+    
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        user = sp.current_user()
+        user_id = user['id']
+        
+        limit = int(request.args.get('limit', 50))
+        offset = int(request.args.get('offset', 0))
+        
+        messages = chat_db.get_user_messages(user_id, limit=limit, offset=offset)
+        
+        return jsonify({
+            "messages": messages,
+            "total": len(messages)
+        })
+        
+    except Exception as e:
+        print(f"Error in get_chat_history: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/session_chat_history', methods=['GET'])
+def get_session_chat_history():
+    """Get chat history for the current session"""
+    print(f"\n=== SESSION CHAT HISTORY REQUEST ===")
+    
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        print(f"❌ Not authenticated")
+        return redirect_response
+    
+    if not chat_db:
+        print(f"❌ Database not configured")
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        session_id = get_session_id()
+        limit = int(request.args.get('limit', 50))
+        
+        print(f"Session ID: {session_id}")
+        print(f"Limit: {limit}")
+        
+        messages = chat_db.get_session_messages(session_id, limit=limit)
+        
+        print(f"Found {len(messages)} messages for session")
+        if messages:
+            print(f"First message: {messages[0].get('content', '')[:50]}...")
+        
+        return jsonify({
+            "messages": messages,
+            "total": len(messages)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in get_session_chat_history: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/liked_tracks', methods=['GET'])
+def get_liked_tracks():
+    """Get all tracks liked by the current user"""
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        return redirect_response
+    
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        user = sp.current_user()
+        user_id = user['id']
+        
+        limit = int(request.args.get('limit', 100))
+        offset = int(request.args.get('offset', 0))
+        
+        tracks = chat_db.get_user_liked_tracks(user_id, limit=limit, offset=offset)
+        
+        return jsonify({
+            "tracks": tracks,
+            "total": len(tracks)
+        })
+        
+    except Exception as e:
+        print(f"Error in get_liked_tracks: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/liked_track_ids', methods=['GET'])
+def get_liked_track_ids():
+    """Get all track IDs liked by the current user (for quick lookups)"""
+    sp, redirect_response = get_authenticated_spotify()
+    if redirect_response:
+        return redirect_response
+    
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        user = sp.current_user()
+        user_id = user['id']
+        
+        track_ids = chat_db.get_user_liked_track_ids(user_id)
+        
+        return jsonify({
+            "track_ids": list(track_ids),
+            "total": len(track_ids)
+        })
+        
+    except Exception as e:
+        print(f"Error in get_liked_track_ids: {e}")
         return jsonify({"error": str(e)}), 500
 
 

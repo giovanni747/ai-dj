@@ -50,6 +50,8 @@ export interface DJRecommendation {
   tracks: SpotifyTrack[];
   mood?: string;
   reasoning?: string;
+  user_message_db_id?: number;
+  assistant_message_db_id?: number;
 }
 
 // Message Types
