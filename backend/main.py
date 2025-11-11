@@ -14,6 +14,20 @@ from ai_service import GroqRecommendationService
 from db import store_token, get_token, delete_token
 from chat_db import chat_db
 
+# Genius API for lyrics
+try:
+    import lyricsgenius
+    GENIUS_API_KEY = os.getenv("GENIUS_API_KEY")
+    genius = lyricsgenius.Genius(GENIUS_API_KEY, timeout=10, remove_section_headers=True) if GENIUS_API_KEY else None
+    if genius:
+        genius.verbose = False  # Disable verbose output
+        print("✅ Genius API initialized")
+    else:
+        print("⚠️  GENIUS_API_KEY not found - lyrics will not be available")
+except ImportError:
+    genius = None
+    print("⚠️  lyricsgenius not installed - lyrics will not be available")
+
 
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(env_path)
@@ -59,6 +73,13 @@ def get_session_id():
         session_id = str(uuid.uuid4())
     return session_id
 
+def get_clerk_user_id():
+    """Get Clerk user ID from request header"""
+    clerk_id = request.headers.get('X-Clerk-User-Id')
+    if not clerk_id:
+        raise ValueError("Clerk user ID not found in request headers")
+    return clerk_id
+
 # Initialize AI service
 ai_service = GroqRecommendationService()
 
@@ -101,6 +122,47 @@ def is_authenticated():
         return token_info is not None
     except:
         return False
+
+def get_lyrics(track_name, artist_name):
+    """
+    Fetch lyrics from Genius API
+    
+    Args:
+        track_name: Name of the track
+        artist_name: Name of the artist (can be comma-separated)
+    
+    Returns:
+        Lyrics string or None if not found
+    """
+    if not genius:
+        return None
+    
+    try:
+        # Get primary artist (first one if comma-separated)
+        primary_artist = artist_name.split(',')[0].strip() if ',' in artist_name else artist_name.strip()
+        
+        print(f"    🔍 Searching Genius for: '{track_name}' by {primary_artist}")
+        
+        # Search for the song
+        song = genius.search_song(track_name, primary_artist)
+        
+        if song and song.lyrics:
+            # Clean up lyrics (remove "Lyrics" header and extra whitespace)
+            lyrics = song.lyrics
+            # Remove common headers
+            if lyrics.startswith("Lyrics"):
+                lyrics = lyrics.split("\n", 1)[1] if "\n" in lyrics else lyrics
+            lyrics = lyrics.strip()
+            
+            print(f"    ✅ Found lyrics ({len(lyrics)} chars)")
+            return lyrics
+        else:
+            print(f"    ⚠️  No lyrics found")
+            return None
+            
+    except Exception as e:
+        print(f"    ❌ Error fetching lyrics: {e}")
+        return None
 
 def get_itunes_preview_url(track_name, artist_name):
     """
@@ -936,21 +998,17 @@ def dj_recommend():
                     # Sort by match score (best matches first)
                     tracks_with_scores.sort(key=lambda x: x.get('match_score', 1.0))
                     
-                    # Select at least 10 best matching tracks (or all if fewer than 10)
-                    min_tracks = 10
-                    selected_tracks = tracks_with_scores[:max(min_tracks, len(tracks_with_scores))]
+                    # Keep all tracks for now - we'll filter to 8 later based on lyrics
+                    selected_tracks = tracks_with_scores
                     
-                    print(f"\nFiltered {len(selected_tracks)} tracks (from {len(tracks_with_scores)} found):")
+                    print(f"\nAudio feature filtering: {len(selected_tracks)} tracks (will filter to 8 after lyrics analysis)")
                     for i, track in enumerate(selected_tracks[:10], 1):
                         match_score = track.get('match_score', 1.0)
                         features = track.get('audio_features', {})
                         print(f"  {i}. {track['name']} - Match: {match_score:.3f} "
                               f"(E:{features.get('energy', 0):.2f}, D:{features.get('danceability', 0):.2f}, V:{features.get('valence', 0):.2f})")
                     
-                    # Update positions for selected tracks
-                    for i, track in enumerate(selected_tracks, 1):
-                        track['position'] = i
-                    
+                    # Don't update positions yet - we'll do that after lyrics filtering
                     tracks = selected_tracks
                     print(f"===============================\n")
                 
@@ -960,14 +1018,105 @@ def dj_recommend():
                 for track in tracks:
                     track['audio_features'] = None
                 
-                # If we can't filter by audio features, just use all tracks (up to 10)
-                tracks = tracks[:10]
-                for i, track in enumerate(tracks, 1):
-                    track['position'] = i
+                # If we can't filter by audio features, keep all tracks for lyrics filtering
+                # We'll filter to 8 later based on lyrics
+                for track in tracks:
+                    track['match_score'] = 0.5  # Default match score
         
         # If we found fewer than 5 tracks, add a warning
         if len(tracks) < 5:
             print(f"WARNING: Only found {len(tracks)} tracks. Consider adding fallback logic.")
+        
+        # Fetch lyrics for all tracks first, then score and filter to top 8
+        print(f"\n=== FETCHING LYRICS & SCORING RELEVANCE ===")
+        tracks_with_scores = []
+        
+        for track in tracks:
+            try:
+                # Fetch lyrics
+                lyrics = get_lyrics(track['name'], track['artist'])
+                
+                if lyrics:
+                    # Debug: Print lyrics in console
+                    print(f"\n📝 LYRICS FOR: {track['name']} by {track['artist']}")
+                    print(f"{'='*60}")
+                    print(lyrics[:500] + "..." if len(lyrics) > 500 else lyrics)  # Print first 500 chars
+                    print(f"{'='*60}\n")
+                    
+                    track['lyrics'] = lyrics
+                    
+                    # Score lyrics relevance (0-10)
+                    lyrics_score = ai_service.score_lyrics_relevance(
+                        lyrics=lyrics,
+                        track_name=track['name'],
+                        artist_name=track['artist'],
+                        user_prompt=user_message
+                    )
+                    track['lyrics_score'] = lyrics_score
+                    print(f"  📊 Lyrics relevance score: {lyrics_score}/10")
+                else:
+                    track['lyrics'] = None
+                    track['lyrics_score'] = 0  # No lyrics = 0 score
+                    print(f"  ⚠️ {track['name']}: No lyrics available (score: 0)")
+                
+                tracks_with_scores.append(track)
+            except Exception as e:
+                print(f"  ✗ Error processing {track['name']}: {e}")
+                track['lyrics'] = None
+                track['lyrics_score'] = 0
+                tracks_with_scores.append(track)
+        
+        # Combine audio feature match score with lyrics score
+        print(f"\n=== COMBINING AUDIO FEATURES & LYRICS SCORES ===")
+        for track in tracks_with_scores:
+            # Get existing match_score from audio features (0-1 scale, lower is better)
+            audio_match_score = track.get('match_score', 0.5)
+            # Convert to 0-10 scale (invert so higher is better)
+            audio_score = (1 - audio_match_score) * 10
+            
+            # Get lyrics score (0-10)
+            lyrics_score = track.get('lyrics_score', 0)
+            
+            # Weighted combination: 40% audio features, 60% lyrics (lyrics is more important for strict selection)
+            combined_score = (audio_score * 0.4) + (lyrics_score * 0.6)
+            track['combined_score'] = combined_score
+            
+            print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score:.1f}, Combined={combined_score:.1f}")
+        
+        # Sort by combined score (highest first) and take top 8
+        tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
+        selected_tracks = tracks_with_scores[:8]
+        
+        print(f"\n✅ Selected top {len(selected_tracks)} tracks based on lyrics + audio features")
+        for i, track in enumerate(selected_tracks, 1):
+            print(f"  {i}. {track['name']} - Score: {track.get('combined_score', 0):.1f}")
+        
+        # Generate explanations only for the final 8 selected tracks
+        print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS ===")
+        for track in selected_tracks:
+            if track.get('lyrics'):
+                explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
+                    lyrics=track['lyrics'],
+                    track_name=track['name'],
+                    artist_name=track['artist'],
+                    user_prompt=user_message
+                )
+                track['lyrics_explanation'] = explanation
+                track['highlighted_terms'] = highlighted_terms if highlighted_terms else []
+                if explanation:
+                    print(f"  ✅ {track['name']}: Generated explanation with {len(highlighted_terms) if highlighted_terms else 0} highlighted terms")
+                else:
+                    print(f"  ⚠️ {track['name']}: Failed to generate explanation")
+            else:
+                track['lyrics_explanation'] = None
+                track['highlighted_terms'] = []
+        
+        # Update positions for final tracks
+        for i, track in enumerate(selected_tracks, 1):
+            track['position'] = i
+        
+        tracks = selected_tracks
+        print(f"================================================\n")
         
         # Update conversation history
         conversation_history.append({"role": "user", "content": user_message})
@@ -980,27 +1129,28 @@ def dj_recommend():
         
         if chat_db:
             try:
-                # Get user ID
-                user = sp.current_user()
-                user_id = user['id']
+                # Get Clerk user ID from header
+                clerk_id = get_clerk_user_id()
                 session_id = get_session_id()
                 
                 # Save user message
                 user_message_db_id = chat_db.save_message(
-                    user_id=user_id,
+                    user_id=None,  # No longer using Spotify user_id
                     session_id=session_id,
                     role='user',
                     content=user_message,
-                    tracks=None
+                    tracks=None,
+                    clerk_id=clerk_id  # Use Clerk ID
                 )
                 
                 # Save assistant message with tracks
                 assistant_message_db_id = chat_db.save_message(
-                    user_id=user_id,
+                    user_id=None,  # No longer using Spotify user_id
                     session_id=session_id,
                     role='assistant',
                     content=dj_intro,
-                    tracks=tracks
+                    tracks=tracks,
+                    clerk_id=clerk_id  # Use Clerk ID
                 )
                 
                 print(f"✅ Saved messages to database (user: {user_message_db_id}, assistant: {assistant_message_db_id})")
@@ -1026,14 +1176,13 @@ def dj_recommend():
 @app.route('/message_feedback', methods=['POST'])
 def message_feedback():
     """Save or update message feedback (like/dislike)"""
-    sp, redirect_response = get_authenticated_spotify()
-    if redirect_response:
-        return redirect_response
-    
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
     try:
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
+        
         data = request.json
         message_id = data.get('message_id')
         feedback_type = data.get('feedback_type')  # 'like', 'dislike', or None to remove
@@ -1041,15 +1190,12 @@ def message_feedback():
         if not message_id:
             return jsonify({"error": "message_id is required"}), 400
         
-        user = sp.current_user()
-        user_id = user['id']
-        
         if feedback_type is None or feedback_type == '':
             # Remove feedback
-            success = chat_db.remove_message_feedback(message_id, user_id)
+            success = chat_db.remove_message_feedback(message_id, clerk_id)
         elif feedback_type in ['like', 'dislike']:
             # Save feedback
-            success = chat_db.save_message_feedback(message_id, user_id, feedback_type)
+            success = chat_db.save_message_feedback(message_id, clerk_id, feedback_type)
         else:
             return jsonify({"error": "feedback_type must be 'like', 'dislike', or null"}), 400
         
@@ -1065,14 +1211,13 @@ def message_feedback():
 @app.route('/track_like', methods=['POST'])
 def track_like():
     """Toggle track like (add or remove)"""
-    sp, redirect_response = get_authenticated_spotify()
-    if redirect_response:
-        return redirect_response
-    
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
     try:
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
+        
         data = request.json
         track_id = data.get('track_id')
         track_name = data.get('track_name')
@@ -1082,11 +1227,8 @@ def track_like():
         if not track_id or not track_name or not track_artist:
             return jsonify({"error": "track_id, track_name, and track_artist are required"}), 400
         
-        user = sp.current_user()
-        user_id = user['id']
-        
         is_liked = chat_db.toggle_track_like(
-            user_id=user_id,
+            user_id=clerk_id,  # Use Clerk ID
             track_id=track_id,
             track_name=track_name,
             track_artist=track_artist,
@@ -1132,8 +1274,8 @@ def get_chat_history():
 
 @app.route('/session_chat_history', methods=['GET'])
 def get_session_chat_history():
-    """Get chat history for the current session"""
-    print(f"\n=== SESSION CHAT HISTORY REQUEST ===")
+    """Get chat history for the current session (DEPRECATED: use clerk_chat_history)"""
+    print(f"\n=== SESSION CHAT HISTORY REQUEST (DEPRECATED) ===")
     
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
@@ -1168,24 +1310,58 @@ def get_session_chat_history():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route('/clerk_chat_history', methods=['GET'])
+def get_clerk_chat_history():
+    """Get chat history for the current Clerk user"""
+    print(f"\n=== CLERK CHAT HISTORY REQUEST ===")
+    
+    if not chat_db:
+        print(f"❌ Database not configured")
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
+        limit = int(request.args.get('limit', 50))
+        
+        print(f"Clerk ID: {clerk_id}")
+        print(f"Limit: {limit}")
+        
+        # Get messages by clerk_id using the existing user messages method
+        messages = chat_db.get_user_messages(clerk_id, limit=limit)
+        
+        print(f"Found {len(messages)} messages for clerk user")
+        if messages:
+            print(f"First message: {messages[0].get('content', '')[:50]}...")
+        
+        return jsonify({
+            "messages": messages,
+            "total": len(messages)
+        })
+        
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        print(f"❌ Error in get_clerk_chat_history: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/liked_tracks', methods=['GET'])
 def get_liked_tracks():
     """Get all tracks liked by the current user"""
-    sp, redirect_response = get_authenticated_spotify()
-    if redirect_response:
-        return redirect_response
-    
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
     try:
-        user = sp.current_user()
-        user_id = user['id']
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
         
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
         
-        tracks = chat_db.get_user_liked_tracks(user_id, limit=limit, offset=offset)
+        tracks = chat_db.get_user_liked_tracks(clerk_id, limit=limit, offset=offset)
         
         return jsonify({
             "tracks": tracks,
@@ -1199,18 +1375,14 @@ def get_liked_tracks():
 @app.route('/liked_track_ids', methods=['GET'])
 def get_liked_track_ids():
     """Get all track IDs liked by the current user (for quick lookups)"""
-    sp, redirect_response = get_authenticated_spotify()
-    if redirect_response:
-        return redirect_response
-    
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
     try:
-        user = sp.current_user()
-        user_id = user['id']
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
         
-        track_ids = chat_db.get_user_liked_track_ids(user_id)
+        track_ids = chat_db.get_user_liked_track_ids(clerk_id)
         
         return jsonify({
             "track_ids": list(track_ids),

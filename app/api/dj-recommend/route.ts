@@ -1,9 +1,20 @@
 import { NextResponse } from 'next/server';
+import { currentUser } from '@clerk/nextjs/server';
 
 export async function POST(request: Request) {
   // Get cookies from request
   const cookieHeader = request.headers.get('cookie') || '';
+  
   try {
+    // Get Clerk user
+    const user = await currentUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Not authenticated with Clerk' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { message } = body;
 
@@ -14,12 +25,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // Forward the request to Flask backend
+    // Forward the request to Flask backend with Clerk user ID
     const response = await fetch('http://127.0.0.1:5001/dj_recommend', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Cookie': cookieHeader, // Forward cookies
+        'Cookie': cookieHeader, // Forward cookies for Spotify session
+        'X-Clerk-User-Id': user.id, // Add Clerk user ID header
       },
       body: JSON.stringify({ message }),
     });

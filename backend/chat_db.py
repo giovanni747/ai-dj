@@ -25,16 +25,17 @@ class ChatDatabase:
     
     # === CHAT MESSAGES ===
     
-    def save_message(self, user_id, session_id, role, content, tracks=None):
+    def save_message(self, user_id, session_id, role, content, tracks=None, clerk_id=None):
         """
         Save a chat message to the database
         
         Args:
-            user_id: Spotify user ID
-            session_id: Session ID
+            user_id: Spotify user ID (deprecated, can be None)
+            session_id: Session ID (for Spotify session tracking)
             role: 'user' or 'assistant'
             content: Message content
             tracks: Optional list of track dicts
+            clerk_id: Clerk user ID (required for user identification)
         
         Returns:
             message_id: ID of the saved message
@@ -45,15 +46,16 @@ class ChatDatabase:
                     tracks_json = json.dumps(tracks) if tracks else None
                     
                     cur.execute('''
-                        INSERT INTO chat_messages (user_id, session_id, role, content, tracks)
+                        INSERT INTO chat_messages (session_id, role, content, tracks, clerk_id)
                         VALUES (%s, %s, %s, %s, %s)
                         RETURNING id
-                    ''', (user_id, session_id, role, content, tracks_json))
+                    ''', (session_id, role, content, tracks_json, clerk_id))
                     
                     message_id = cur.fetchone()[0]
                     conn.commit()
                     
-                    print(f"✅ Saved message (ID: {message_id}) for user {user_id[:10]}...")
+                    user_display = clerk_id[:10] if clerk_id else (user_id[:10] if user_id else "unknown")
+                    print(f"✅ Saved message (ID: {message_id}) for user {user_display}...")
                     return message_id
                     
         except Exception as e:
@@ -62,12 +64,12 @@ class ChatDatabase:
             traceback.print_exc()
             return None
     
-    def get_user_messages(self, user_id, limit=50, offset=0):
+    def get_user_messages(self, clerk_id_or_user_id, limit=50, offset=0):
         """
-        Get chat messages for a user
+        Get chat messages for a user (by clerk_id or legacy user_id)
         
         Args:
-            user_id: Spotify user ID
+            clerk_id_or_user_id: Clerk user ID (preferred) or Spotify user ID (legacy)
             limit: Number of messages to retrieve
             offset: Offset for pagination
         
@@ -77,13 +79,14 @@ class ChatDatabase:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Query by clerk_id only (user_id column has been dropped)
                     cur.execute('''
-                        SELECT id, user_id, session_id, role, content, tracks, created_at
+                        SELECT id, session_id, role, content, tracks, created_at, clerk_id
                         FROM chat_messages
-                        WHERE user_id = %s
-                        ORDER BY created_at DESC
+                        WHERE clerk_id = %s
+                        ORDER BY created_at ASC
                         LIMIT %s OFFSET %s
-                    ''', (user_id, limit, offset))
+                    ''', (clerk_id_or_user_id, limit, offset))
                     
                     rows = cur.fetchall()
                     messages = []
@@ -91,12 +94,12 @@ class ChatDatabase:
                     for row in rows:
                         messages.append({
                             'id': row[0],
-                            'user_id': row[1],
-                            'session_id': row[2],
-                            'role': row[3],
-                            'content': row[4],
-                            'tracks': json.loads(row[5]) if row[5] else None,
-                            'created_at': row[6].isoformat() if row[6] else None
+                            'session_id': row[1],
+                            'role': row[2],
+                            'content': row[3],
+                            'tracks': row[4],  # Already parsed by psycopg2 for JSONB columns
+                            'created_at': row[5].isoformat() if row[5] else None,
+                            'clerk_id': row[6]
                         })
                     
                     return messages
@@ -137,7 +140,7 @@ class ChatDatabase:
                             'session_id': row[2],
                             'role': row[3],
                             'content': row[4],
-                            'tracks': json.loads(row[5]) if row[5] else None,
+                            'tracks': row[5],  # Already parsed by psycopg2 for JSONB columns
                             'created_at': row[6].isoformat() if row[6] else None
                         })
                     
@@ -155,7 +158,7 @@ class ChatDatabase:
         
         Args:
             message_id: ID of the message
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
             feedback_type: 'like' or 'dislike'
         
         Returns:
@@ -165,9 +168,9 @@ class ChatDatabase:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute('''
-                        INSERT INTO message_feedback (message_id, user_id, feedback_type)
+                        INSERT INTO message_feedback (message_id, clerk_id, feedback_type)
                         VALUES (%s, %s, %s)
-                        ON CONFLICT (message_id, user_id)
+                        ON CONFLICT (message_id, clerk_id)
                         DO UPDATE SET feedback_type = EXCLUDED.feedback_type
                     ''', (message_id, user_id, feedback_type))
                     
@@ -185,7 +188,7 @@ class ChatDatabase:
         
         Args:
             message_id: ID of the message
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
         
         Returns:
             True if successful, False otherwise
@@ -195,7 +198,7 @@ class ChatDatabase:
                 with conn.cursor() as cur:
                     cur.execute('''
                         DELETE FROM message_feedback
-                        WHERE message_id = %s AND user_id = %s
+                        WHERE message_id = %s AND clerk_id = %s
                     ''', (message_id, user_id))
                     
                     conn.commit()
@@ -212,7 +215,7 @@ class ChatDatabase:
         
         Args:
             message_id: ID of the message
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
         
         Returns:
             'like', 'dislike', or None
@@ -223,7 +226,7 @@ class ChatDatabase:
                     cur.execute('''
                         SELECT feedback_type
                         FROM message_feedback
-                        WHERE message_id = %s AND user_id = %s
+                        WHERE message_id = %s AND clerk_id = %s
                     ''', (message_id, user_id))
                     
                     row = cur.fetchone()
@@ -240,7 +243,7 @@ class ChatDatabase:
         Toggle track like (if exists, remove it; if not, add it)
         
         Args:
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
             track_id: Spotify track ID
             track_name: Track name
             track_artist: Track artist(s)
@@ -255,7 +258,7 @@ class ChatDatabase:
                     # Check if already liked
                     cur.execute('''
                         SELECT id FROM track_likes
-                        WHERE user_id = %s AND track_id = %s
+                        WHERE clerk_id = %s AND track_id = %s
                     ''', (user_id, track_id))
                     
                     existing = cur.fetchone()
@@ -264,7 +267,7 @@ class ChatDatabase:
                         # Unlike (remove)
                         cur.execute('''
                             DELETE FROM track_likes
-                            WHERE user_id = %s AND track_id = %s
+                            WHERE clerk_id = %s AND track_id = %s
                         ''', (user_id, track_id))
                         conn.commit()
                         print(f"✅ Unliked track: {track_name}")
@@ -272,7 +275,7 @@ class ChatDatabase:
                     else:
                         # Like (add)
                         cur.execute('''
-                            INSERT INTO track_likes (user_id, track_id, track_name, track_artist, track_image_url)
+                            INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url)
                             VALUES (%s, %s, %s, %s, %s)
                         ''', (user_id, track_id, track_name, track_artist, track_image_url))
                         conn.commit()
@@ -288,7 +291,7 @@ class ChatDatabase:
         Get all tracks liked by a user
         
         Args:
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
             limit: Number of tracks to retrieve
             offset: Offset for pagination
         
@@ -301,7 +304,7 @@ class ChatDatabase:
                     cur.execute('''
                         SELECT id, track_id, track_name, track_artist, track_image_url, created_at
                         FROM track_likes
-                        WHERE user_id = %s
+                        WHERE clerk_id = %s
                         ORDER BY created_at DESC
                         LIMIT %s OFFSET %s
                     ''', (user_id, limit, offset))
@@ -330,7 +333,7 @@ class ChatDatabase:
         Check if a track is liked by a user
         
         Args:
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
             track_id: Spotify track ID
         
         Returns:
@@ -341,7 +344,7 @@ class ChatDatabase:
                 with conn.cursor() as cur:
                     cur.execute('''
                         SELECT id FROM track_likes
-                        WHERE user_id = %s AND track_id = %s
+                        WHERE clerk_id = %s AND track_id = %s
                     ''', (user_id, track_id))
                     
                     return cur.fetchone() is not None
@@ -355,7 +358,7 @@ class ChatDatabase:
         Get all track IDs liked by a user (optimized for quick lookups)
         
         Args:
-            user_id: Spotify user ID
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
         
         Returns:
             Set of track IDs
@@ -365,7 +368,7 @@ class ChatDatabase:
                 with conn.cursor() as cur:
                     cur.execute('''
                         SELECT track_id FROM track_likes
-                        WHERE user_id = %s
+                        WHERE clerk_id = %s
                     ''', (user_id,))
                     
                     return {row[0] for row in cur.fetchall()}

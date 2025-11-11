@@ -6,6 +6,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { Music, LogIn } from "lucide-react";
 import { motion, useInView, Variants, Transition } from "framer-motion";
 import confetti from "canvas-confetti";
+import { Spinner } from "@/components/ui/spinner";
 
 // Confetti component
 type Api = { fire: (options?: confetti.Options) => void };
@@ -245,7 +246,7 @@ export const SpotifyLogin = ({ brandName = "AI DJ", onLoginClick }: SpotifyLogin
             >
               {isLoading ? (
                 <>
-                  <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
+                  <Spinner size="sm" className="text-white" />
                   <span className="font-semibold text-foreground">Connecting...</span>
                 </>
               ) : (

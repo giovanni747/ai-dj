@@ -5,7 +5,8 @@ import { useState, useRef, useEffect } from "react";
 import type { SpotifyTrack } from "@/types";
 import { formatDuration, getAlbumArt } from "@/lib/track-utils";
 import { cn } from "@/lib/utils";
-import { ExternalLink, Play, Pause, Music, Heart } from "lucide-react";
+import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText } from "lucide-react";
+import { highlightLyricsTerms } from "@/lib/lyrics-highlight";
 
 interface TrackListProps {
   tracks: SpotifyTrack[];
@@ -17,6 +18,7 @@ interface TrackListProps {
 export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike }: TrackListProps) {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [expandedTracks, setExpandedTracks] = useState<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Stop audio when component unmounts or track changes
@@ -97,9 +99,9 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.3, delay: index * 0.05 }}
-            className={`group relative flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors ${track.preview_url ? 'cursor-pointer' : 'cursor-default'}`}
-            onClick={() => handlePlayPause(track)}
+            className={`group relative flex flex-col gap-2 p-3 rounded-lg hover:bg-white/5 transition-colors ${track.preview_url ? 'cursor-pointer' : 'cursor-default'}`}
           >
+            <div className="flex items-center gap-3 w-full" onClick={() => handlePlayPause(track)}>
             {/* Position Number */}
             <div className="shrink-0 w-6 text-center text-xs font-semibold text-white/60">
               {track.position}
@@ -195,6 +197,82 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
             >
               <ExternalLink className="w-4 h-4 text-white/60 hover:text-white transition-colors" />
             </a>
+            </div>
+            
+            {/* Lyrics Explanation and Lyrics - Below the track row */}
+            <div className="w-full pl-16 space-y-2">
+              {/* Lyrics Explanation */}
+              {track.lyrics_explanation && (
+                <div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newExpanded = new Set(expandedTracks);
+                      if (newExpanded.has(track.id)) {
+                        newExpanded.delete(track.id);
+                      } else {
+                        newExpanded.add(track.id);
+                      }
+                      setExpandedTracks(newExpanded);
+                    }}
+                    className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                  >
+                    {expandedTracks.has(track.id) ? (
+                      <ChevronUp className="w-3 h-3" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3" />
+                    )}
+                    <span>Why this song matches</span>
+                  </button>
+                  {expandedTracks.has(track.id) && (
+                    <div className="mt-1 p-2 bg-white/5 rounded text-xs text-white/80 leading-relaxed">
+                      {track.lyrics_explanation}
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Lyrics */}
+              {track.lyrics && (
+                <div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newExpanded = new Set(expandedTracks);
+                      const lyricsKey = `${track.id}-lyrics`;
+                      if (newExpanded.has(lyricsKey)) {
+                        newExpanded.delete(lyricsKey);
+                      } else {
+                        newExpanded.add(lyricsKey);
+                      }
+                      setExpandedTracks(newExpanded);
+                    }}
+                    className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1 transition-colors"
+                  >
+                    <FileText className="w-3 h-3" />
+                    {expandedTracks.has(`${track.id}-lyrics`) ? (
+                      <>
+                        <ChevronUp className="w-3 h-3" />
+                        <span>Hide lyrics</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-3 h-3" />
+                        <span>Show lyrics</span>
+                      </>
+                    )}
+                  </button>
+                  {expandedTracks.has(`${track.id}-lyrics`) && (
+                    <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap">
+                      {highlightLyricsTerms(
+                        track.lyrics,
+                        track.highlighted_terms || []
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </motion.div>
         );
       })}

@@ -2,20 +2,17 @@
 
 import { AIInputWithLoadingDemo } from "@/components/ui/ai-input-demo";
 import { useState, useEffect } from "react";
-import { SpotifyAuthDialog } from "@/components/ui/spotify-auth-dialog";
 import { HeroWave } from "@/components/ui/ai-input-hero";
+import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
 import type { AuthResponse } from "@/types";
-// Gradient background via CSS utility class
 
 export default function Home() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [showAuthDialog, setShowAuthDialog] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [spotifyConnected, setSpotifyConnected] = useState<boolean>(false);
 
   useEffect(() => {
-    checkAuth();
+    checkSpotifyConnection();
     
-    // Check URL params for auth redirect from Flask
+    // Check URL params for Spotify auth redirect from Flask
     const params = new URLSearchParams(window.location.search);
     const authStatus = params.get('auth');
     const sessionId = params.get('session_id');
@@ -27,108 +24,77 @@ export default function Home() {
         .then(() => {
           // Clean URL
           window.history.replaceState({}, '', '/');
-          // Re-check auth state without full reload
-          checkAuth();
+          // Re-check Spotify connection
+          checkSpotifyConnection();
         })
         .catch((e) => {
           console.error('Failed to set session cookie:', e);
-          // Fallback: still clean URL to avoid loops
           window.history.replaceState({}, '', '/');
         });
     } else if (error) {
-      // Show error in dialog
-      console.error('Auth error:', error);
-      setShowAuthDialog(true);
-      // Clean URL
+      console.error('Spotify auth error:', error);
       window.history.replaceState({}, '', '/');
     }
   }, []);
 
-  const checkAuth = async () => {
+  const checkSpotifyConnection = async () => {
     try {
       const response = await fetch('/api/spotify-auth', {
         credentials: 'include',
       });
       
-      if (!response.ok) {
-        setIsAuthenticated(false);
-        return;
+      if (response.ok) {
+        const data: AuthResponse = await response.json();
+        setSpotifyConnected(data.authenticated);
+      } else {
+        setSpotifyConnected(false);
       }
-      
-      const data: AuthResponse = await response.json();
-      setIsAuthenticated(data.authenticated);
     } catch (error) {
-      console.error('Auth check failed:', error);
-      setIsAuthenticated(false);
-    } finally {
-      setIsLoading(false);
+      console.error('Spotify connection check failed:', error);
+      setSpotifyConnected(false);
     }
   };
-
-  const handleSubmitAttempt = async () => {
-    // Check auth before allowing submit
-    try {
-      const response = await fetch('/api/spotify-auth', {
-        credentials: 'include',
-      });
-      
-      if (!response.ok) {
-        setShowAuthDialog(true);
-        return false;
-      }
-      
-      const data: AuthResponse = await response.json();
-      
-      if (!data.authenticated) {
-        setShowAuthDialog(true);
-        return false;
-      }
-      
-      setIsAuthenticated(true);
-      return true;
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      setShowAuthDialog(true);
-      return false;
-    }
-  };
-
-  // Show loading state
-  if (isLoading) {
-    return (
-      <div className="relative min-h-screen">
-        {/* Hero background behind content */}
-        <HeroWave showOverlay={false} />
-        <div className="relative z-10 flex min-h-screen items-center justify-center pointer-events-none">
-          <div className="text-center">
-            <div className="animate-spin h-10 w-10 border-4 border-[#1DB954] border-t-transparent rounded-full mx-auto mb-3" />
-            <p className="text-gray-600 text-sm">Loading...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="relative min-h-screen">
-      {/* Hero background behind content */}
+      {/* Hero background */}
       <HeroWave showOverlay={false} />
-      <div className="relative z-10 flex min-h-screen items-center justify-center pointer-events-none">
-        <div className="text-left w-full max-w-4xl px-4 pointer-events-auto">
-          {/* Header (title removed per request) */}
-          <div className="mb-6 text-center">
-            {/* Title intentionally removed */}
-          </div>
-          
-          <AIInputWithLoadingDemo onAuthRequired={handleSubmitAttempt} />
-        </div>
-      </div>
       
-      {/* Auth Dialog - shows when user tries to submit without auth */}
-      <SpotifyAuthDialog 
-        open={showAuthDialog} 
-        onOpenChange={setShowAuthDialog}
-      />
+      {/* User button in top right when signed in */}
+      <SignedIn>
+        <div className="fixed top-4 right-4 z-50 pointer-events-auto">
+          <UserButton afterSignOutUrl="/" />
+        </div>
+      </SignedIn>
+      
+      {/* Sign-in modal when not signed in */}
+      <SignedOut>
+        <div className="relative z-10 flex min-h-screen items-center justify-center pointer-events-none">
+          <div className="text-center pointer-events-auto">
+            <div className="max-w-md mx-auto p-8 rounded-2xl bg-white/5 backdrop-blur-2xl border border-white/10">
+              <div className="mb-6">
+                <h1 className="text-3xl font-semibold text-white mb-2">AI DJ</h1>
+                <p className="text-gray-300">Sign in to get personalized music recommendations</p>
+              </div>
+              <SignInButton mode="modal">
+                <button className="w-full bg-white hover:bg-gray-100 text-black font-medium px-6 py-3 rounded-lg transition-colors">
+                  Sign In
+                </button>
+              </SignInButton>
+            </div>
+          </div>
+        </div>
+      </SignedOut>
+      
+      {/* Main app when signed in */}
+      <SignedIn>
+        <div className="relative z-10">
+          <AIInputWithLoadingDemo 
+            spotifyConnected={spotifyConnected}
+            onSpotifyReconnect={checkSpotifyConnection}
+          />
+        </div>
+      </SignedIn>
     </div>
   );
 }

@@ -26,6 +26,9 @@ export interface SpotifyTrack {
   duration_ms: number;
   popularity: number;
   audio_features?: AudioFeatures | null; // Audio features from Spotify API
+  lyrics?: string | null; // Full lyrics from Genius API
+  lyrics_explanation?: string | null; // LLM explanation of why lyrics match the prompt
+  highlighted_terms?: string[]; // Terms from lyrics that relate to the prompt/preferences
 }
 
 export interface SpotifyUser {

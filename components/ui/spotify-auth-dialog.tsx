@@ -13,9 +13,10 @@ import {
 interface SpotifyAuthDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onConnected?: () => void;
 }
 
-export const SpotifyAuthDialog = ({ open, onOpenChange }: SpotifyAuthDialogProps) => {
+export const SpotifyAuthDialog = ({ open, onOpenChange, onConnected }: SpotifyAuthDialogProps) => {
   const handleSpotifyLogin = () => {
     // Store current URL to return after auth
     localStorage.setItem('return_url', window.location.href);

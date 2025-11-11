@@ -15,6 +15,11 @@ export const Conversation = ({ className, ...props }: ConversationProps) => (
     initial="smooth"
     resize="smooth"
     role="log"
+    style={{ 
+      overscrollBehavior: 'contain',
+      scrollBehavior: 'smooth',
+      ...props.style 
+    }}
     {...props}
   />
 );

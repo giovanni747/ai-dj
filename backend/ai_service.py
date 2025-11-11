@@ -46,7 +46,7 @@ class GroqRecommendationService:
         system_prompt = """You are an AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 20 songs that exist on Spotify (we'll filter to best matches based on audio features)
+3. Recommend exactly 20 songs that exist on Spotify (we'll filter to best matches based on lyrics and audio features)
 4. Provide a brief DJ-style introduction (2-3 sentences)
 
 Return your response as a JSON object with this exact structure:
@@ -190,4 +190,140 @@ Based on this profile and request, recommend exactly 20 songs that match their t
         
         seed_tracks = response.choices[0].message.content.strip().split(',')
         return [track.strip() for track in seed_tracks]
+    
+    def score_lyrics_relevance(self, lyrics, track_name, artist_name, user_prompt):
+        """
+        Score how well song lyrics match the user's prompt (0-10 scale)
+        
+        Args:
+            lyrics: Full lyrics text
+            track_name: Name of the track
+            artist_name: Name of the artist
+            user_prompt: User's original request/prompt
+        
+        Returns:
+            Score (0-10) or None if error
+        """
+        # Truncate lyrics if too long (keep first 1500 chars to reduce tokens)
+        lyrics_preview = lyrics[:1500] if len(lyrics) > 1500 else lyrics
+        if len(lyrics) > 1500:
+            lyrics_preview += "\n[... lyrics truncated ...]"
+        
+        prompt = f"""Rate how well these song lyrics match the user's request on a scale of 0-10.
+
+User's Request: "{user_prompt}"
+
+Song: "{track_name}" by {artist_name}
+
+Lyrics:
+{lyrics_preview}
+
+Consider:
+- How well the themes, emotions, or messages in the lyrics align with the user's request
+- The relevance of the lyrical content to what they're looking for
+- The overall match quality
+
+Return ONLY a single number from 0-10 (where 10 is a perfect match), nothing else."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,  # Lower temperature for more consistent scoring
+                max_tokens=10
+            )
+            score_text = response.choices[0].message.content.strip()
+            # Extract number from response
+            import re
+            score_match = re.search(r'\d+', score_text)
+            if score_match:
+                score = int(score_match.group())
+                # Clamp to 0-10
+                score = max(0, min(10, score))
+                return score
+            return 5  # Default score if parsing fails
+        except Exception as e:
+            print(f"    ❌ Error scoring lyrics: {e}")
+            return 5  # Default score on error
+    
+    def explain_lyrics_relevance(self, lyrics, track_name, artist_name, user_prompt):
+        """
+        Generate explanation of how song lyrics relate to user's prompt and identify highlighted terms
+        
+        Args:
+            lyrics: Full lyrics text
+            track_name: Name of the track
+            artist_name: Name of the artist
+            user_prompt: User's original request/prompt
+        
+        Returns:
+            Tuple of (explanation string, highlighted_terms list) or (None, None) if error
+        """
+        # Truncate lyrics if too long (keep first 2000 chars to avoid token limits)
+        lyrics_preview = lyrics[:2000] if len(lyrics) > 2000 else lyrics
+        if len(lyrics) > 2000:
+            lyrics_preview += "\n[... lyrics truncated ...]"
+        
+        prompt = f"""Analyze how these song lyrics relate to the user's request and explain why this song is a good match.
+
+User's Request: "{user_prompt}"
+
+Song: "{track_name}" by {artist_name}
+
+Lyrics:
+{lyrics_preview}
+
+Provide:
+1. A brief, engaging explanation (2-3 sentences) of how the themes, emotions, or messages in these lyrics connect to the user's request and why this song is a perfect match.
+2. A list of specific words, phrases, or terms from the lyrics that directly relate to the user's request or preferences. These should be exact matches from the lyrics text.
+
+Return your response as a JSON object with this exact structure:
+{{
+  "explanation": "Your explanation here (2-3 sentences)",
+  "highlighted_terms": ["exact word or phrase from lyrics", "another term", "etc"]
+}}
+
+IMPORTANT:
+- The highlighted_terms should be exact words or phrases as they appear in the lyrics
+- Include 3-8 terms that are most relevant to the user's request
+- Terms can be single words or short phrases (2-4 words max)
+- Return ONLY valid JSON, no other text"""
+
+        try:
+            print(f"    🤖 Generating lyrics explanation for: {track_name}")
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=400
+            )
+            response_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            import json
+            import re
+            
+            try:
+                # Try to extract JSON from response (in case LLM adds extra text)
+                result = json.loads(response_text)
+            except json.JSONDecodeError:
+                # Try to extract JSON from markdown code blocks or plain text
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    result = json.loads(json_match.group())
+                else:
+                    print(f"    ⚠️ Could not parse JSON, using fallback")
+                    # Fallback: use response as explanation, no highlighted terms
+                    return response_text, []
+            
+            explanation = result.get('explanation', response_text)
+            highlighted_terms = result.get('highlighted_terms', [])
+            
+            print(f"    ✅ Generated explanation ({len(explanation)} chars)")
+            print(f"    ✅ Identified {len(highlighted_terms)} highlighted terms: {highlighted_terms[:5]}")
+            
+            return explanation, highlighted_terms
+        except Exception as e:
+            print(f"    ❌ Error generating lyrics explanation: {e}")
+            return None, None
 
