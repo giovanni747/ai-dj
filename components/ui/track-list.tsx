@@ -13,9 +13,10 @@ interface TrackListProps {
   className?: string;
   likedTracks?: Set<string>;
   onToggleLike?: (trackId: string) => void;
+  frequentlyLikedTerms?: Set<string>;
 }
 
-export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike }: TrackListProps) {
+export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike, frequentlyLikedTerms = new Set() }: TrackListProps) {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [expandedTracks, setExpandedTracks] = useState<Set<string>>(new Set());
@@ -263,10 +264,11 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                     )}
                   </button>
                   {expandedTracks.has(`${track.id}-lyrics`) && (
-                    <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap">
+                    <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto overflow-x-hidden relative whitespace-pre-wrap">
                       {highlightLyricsTerms(
                         track.lyrics,
-                        track.highlighted_terms || []
+                        track.highlighted_terms || [],
+                        frequentlyLikedTerms
                       )}
                     </div>
                   )}

@@ -181,9 +181,6 @@ export function AIInputWithLoading({
             )}
           </button>
         </div>
-        <p className="pl-4 h-4 text-xs mx-auto text-gray-500">
-          {submitted ? "Dj is mixing..." : "Ready to submit!"}
-        </p>
       </div>
     </div>
   );

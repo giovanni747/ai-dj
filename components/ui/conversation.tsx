@@ -31,9 +31,15 @@ export type ConversationContentProps = ComponentProps<
 export const ConversationContent = ({
   className,
   ...props
-}: ConversationContentProps) => (
-  <StickToBottom.Content className={cn('p-4 no-scrollbar', className)} {...props} />
-);
+}: ConversationContentProps) => {
+  // Extract padding classes from className to allow overrides
+  const hasCustomPadding = className?.includes('pb-') || className?.includes('pt-') || className?.includes('px-') || className?.includes('py-');
+  const basePadding = hasCustomPadding ? '' : 'p-4';
+  
+  return (
+    <StickToBottom.Content className={cn(basePadding, 'no-scrollbar', className)} {...props} />
+  );
+};
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
 

@@ -194,7 +194,7 @@ export const AnimatedTrackCarousel = ({
                     <h4 className="text-sm font-semibold text-purple-400 mb-2">
                       Lyrics:
                     </h4>
-                    <div className="max-h-48 overflow-y-auto bg-white/5 rounded-lg p-3">
+                    <div className="max-h-48 overflow-y-auto overflow-x-hidden relative bg-white/5 rounded-lg p-3">
                       <motion.p 
                         className="text-xs text-white/70 leading-relaxed whitespace-pre-wrap"
                         initial={{ opacity: 0 }}

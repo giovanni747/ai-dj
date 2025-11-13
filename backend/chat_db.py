@@ -238,7 +238,8 @@ class ChatDatabase:
     
     # === TRACK LIKES ===
     
-    def toggle_track_like(self, user_id, track_id, track_name, track_artist, track_image_url=None):
+    def toggle_track_like(self, user_id, track_id, track_name, track_artist, track_image_url=None, 
+                          energy=None, danceability=None, valence=None, highlighted_terms=None):
         """
         Toggle track like (if exists, remove it; if not, add it)
         
@@ -248,6 +249,10 @@ class ChatDatabase:
             track_name: Track name
             track_artist: Track artist(s)
             track_image_url: Optional track image URL
+            energy: Audio feature energy (0.0-1.0)
+            danceability: Audio feature danceability (0.0-1.0)
+            valence: Audio feature valence (0.0-1.0)
+            highlighted_terms: List of highlighted terms from lyrics (stored as JSONB)
         
         Returns:
             True if liked (added), False if unliked (removed)
@@ -273,17 +278,21 @@ class ChatDatabase:
                         print(f"✅ Unliked track: {track_name}")
                         return False
                     else:
-                        # Like (add)
+                        # Like (add) - include audio features and highlighted_terms if provided
+                        highlighted_terms_json = json.dumps(highlighted_terms if highlighted_terms else [])
                         cur.execute('''
-                            INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url)
-                            VALUES (%s, %s, %s, %s, %s)
-                        ''', (user_id, track_id, track_name, track_artist, track_image_url))
+                            INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ''', (user_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms_json))
                         conn.commit()
-                        print(f"✅ Liked track: {track_name}")
+                        terms_count = len(highlighted_terms) if highlighted_terms else 0
+                        print(f"✅ Liked track: {track_name} (energy={energy}, danceability={danceability}, valence={valence}, highlighted_terms={terms_count})")
                         return True
                     
         except Exception as e:
             print(f"❌ Error toggling track like: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def get_user_liked_tracks(self, user_id, limit=100, offset=0):
@@ -375,6 +384,104 @@ class ChatDatabase:
                     
         except Exception as e:
             print(f"❌ Error getting liked track IDs: {e}")
+            return set()
+    
+    def get_user_audio_profile(self, user_id):
+        """
+        Get average audio features from user's liked tracks
+        
+        Args:
+            user_id: Clerk user ID
+        
+        Returns:
+            Dict with 'energy', 'danceability', 'valence' averages, or None if no liked tracks with features
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Get average audio features from liked tracks that have features
+                    cur.execute('''
+                        SELECT 
+                            AVG(energy) as avg_energy,
+                            AVG(danceability) as avg_danceability,
+                            AVG(valence) as avg_valence,
+                            COUNT(*) as track_count
+                        FROM track_likes
+                        WHERE clerk_id = %s 
+                        AND energy IS NOT NULL 
+                        AND danceability IS NOT NULL 
+                        AND valence IS NOT NULL
+                    ''', (user_id,))
+                    
+                    row = cur.fetchone()
+                    
+                    if row and row[3] > 0:  # track_count > 0
+                        return {
+                            'energy': float(row[0]) if row[0] else None,
+                            'danceability': float(row[1]) if row[1] else None,
+                            'valence': float(row[2]) if row[2] else None,
+                            'track_count': int(row[3])
+                        }
+                    else:
+                        # No liked tracks with audio features
+                        return None
+                    
+        except Exception as e:
+            print(f"❌ Error getting user audio profile: {e}")
+            return None
+    
+    def get_frequently_liked_terms(self, user_id, min_occurrences=2):
+        """
+        Get highlighted terms that appear frequently in liked tracks
+        
+        Args:
+            user_id: Clerk user ID (kept as user_id for backwards compatibility)
+            min_occurrences: Minimum number of times a term must appear in liked tracks (default: 2)
+        
+        Returns:
+            Set of terms that appear in at least min_occurrences liked tracks (case-insensitive)
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Get all highlighted_terms from liked tracks
+                    cur.execute('''
+                        SELECT highlighted_terms
+                        FROM track_likes
+                        WHERE clerk_id = %s
+                        AND highlighted_terms IS NOT NULL
+                        AND jsonb_array_length(highlighted_terms) > 0
+                    ''', (user_id,))
+                    
+                    rows = cur.fetchall()
+                    
+                    # Count occurrences of each term (case-insensitive)
+                    term_counts = {}
+                    for row in rows:
+                        terms = row[0]  # JSONB array
+                        if terms:
+                            for term in terms:
+                                # Normalize term (lowercase) for case-insensitive matching
+                                term_lower = term.lower().strip() if isinstance(term, str) else str(term).lower().strip()
+                                if term_lower:
+                                    term_counts[term_lower] = term_counts.get(term_lower, 0) + 1
+                    
+                    # Filter terms that appear at least min_occurrences times
+                    frequently_liked_terms = {
+                        term for term, count in term_counts.items() 
+                        if count >= min_occurrences
+                    }
+                    
+                    print(f"✅ Found {len(frequently_liked_terms)} frequently liked terms (appearing in >= {min_occurrences} liked tracks)")
+                    if frequently_liked_terms:
+                        print(f"   Terms: {list(frequently_liked_terms)[:10]}")
+                    
+                    return frequently_liked_terms
+                    
+        except Exception as e:
+            print(f"❌ Error getting frequently liked terms: {e}")
+            import traceback
+            traceback.print_exc()
             return set()
 
 

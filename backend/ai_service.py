@@ -6,10 +6,13 @@ from pathlib import Path
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(env_path)
 
+# Debug mode - set to False in production to reduce logging
+DEBUG_MODE = os.getenv("AI_SERVICE_DEBUG", "false").lower() == "true"
+
 class GroqRecommendationService:
     def __init__(self):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        # Use llama-3.3-70b-versatile (latest stable Groq model with good JSON support)
+        # Use the specified model (note: verify this model exists in Groq)
         self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         
     def analyze_profile(self, user_data):
@@ -46,16 +49,16 @@ class GroqRecommendationService:
         system_prompt = """You are an AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 20 songs that exist on Spotify (we'll filter to best matches based on lyrics and audio features)
+3. Recommend exactly 8 songs that exist on Spotify (we'll verify these are the best matches)
 4. Provide a brief DJ-style introduction (2-3 sentences)
 
 Return your response as a JSON object with this exact structure:
 {
-  "intro": "Your DJ-style introduction here (2-3 sentences)",
+  "intro": "Your DJ-style introduction here (3-5 sentences, make it longer and more engaging)",
   "songs": [
     {"title": "Song Title", "artist": "Artist Name"},
     {"title": "Song Title", "artist": "Artist Name"},
-    ... (exactly 20 songs)
+    ... (exactly 8 songs)
   ]
 }
 
@@ -63,8 +66,10 @@ IMPORTANT:
 - Only recommend songs that actually exist on Spotify (popular, well-known songs)
 - Match the user's request AND their music taste
 - Ensure songs are relevant to what they asked for
-- Provide variety in your recommendations (we'll filter to best matches)
-- Return ONLY valid JSON, no other text"""
+- Provide variety in your recommendations
+- The intro should be 3-5 sentences long and engaging
+- Escape all quotes in the intro text using backslashes (e.g., use \\" for quotes inside strings)
+- Return ONLY valid JSON, no other text, no markdown code blocks"""
         
         if conversation_history and len(conversation_history) > 0:
             messages = [{"role": "system", "content": system_prompt}] + conversation_history
@@ -75,18 +80,35 @@ IMPORTANT:
         top_artists_names = [a['name'] for a in user_profile.get('top_artists', [])[:10]]
         top_tracks_names = [t['name'] for t in user_profile.get('top_tracks', [])[:10]]
         
-        # Get audio features with fallback display
+        # Get audio features - try Spotify API first, then fallback to database
         audio_features_avg = user_profile.get('audio_features_avg', {})
         has_audio_features = audio_features_avg and len(audio_features_avg) > 0
+        
+        # If Spotify API doesn't have audio features, try database profile
+        if not has_audio_features:
+            db_audio_profile = user_profile.get('db_audio_profile')
+            if db_audio_profile and db_audio_profile.get('track_count', 0) > 0:
+                # Use database averages
+                audio_features_avg = {
+                    'energy': db_audio_profile.get('energy'),
+                    'danceability': db_audio_profile.get('danceability'),
+                    'valence': db_audio_profile.get('valence')
+                }
+                has_audio_features = True
+                print(f"✅ Using database audio profile (from {db_audio_profile['track_count']} liked tracks)")
         
         if has_audio_features:
             energy_str = f"{audio_features_avg.get('energy', 0):.2f} (0=calm, 1=energetic)"
             danceability_str = f"{audio_features_avg.get('danceability', 0):.2f} (0=not danceable, 1=danceable)"
             valence_str = f"{audio_features_avg.get('valence', 0):.2f} (0=sad, 1=happy)"
         else:
-            energy_str = "Not available (audio features API access restricted)"
-            danceability_str = "Not available (audio features API access restricted)"
-            valence_str = "Not available (audio features API access restricted)"
+            # Default values when no audio features available (from Spotify or database)
+            # Use neutral defaults: 0.5 for all features
+            energy_str = "0.50 (default - no audio profile data available)"
+            danceability_str = "0.50 (default - no audio profile data available)"
+            valence_str = "0.50 (default - no audio profile data available)"
+            audio_features_avg = {'energy': 0.5, 'danceability': 0.5, 'valence': 0.5}
+            print("⚠️  No audio features available from Spotify API or database - using defaults (0.5)")
         
         context = f"""User's Music Profile:
 - Genres: {', '.join(user_profile.get('genres', [])[:10]) or 'Various'}
@@ -98,59 +120,64 @@ IMPORTANT:
 
 User's Request: {user_message}
 
-Based on this profile and request, recommend exactly 20 songs that match their taste and request. We'll filter these to find the best matches based on audio features. Return as JSON."""
+Based on this profile and request, recommend exactly 8 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
         
         messages.append({
             "role": "user",
             "content": context
         })
         
-        # Print complete prompt and context being sent to LLM
-        print(f"\n{'='*80}")
-        print(f"=== LLM PROMPT & CONTEXT ===")
-        print(f"{'='*80}")
-        print(f"\n[SYSTEM PROMPT]")
-        print(f"{system_prompt}")
-        print(f"\n[CONVERSATION HISTORY]")
-        if conversation_history and len(conversation_history) > 0:
-            for i, msg in enumerate(conversation_history):
-                print(f"  {i+1}. {msg.get('role', 'unknown')}: {msg.get('content', '')[:100]}...")
-        else:
-            print(f"  (none)")
-        print(f"\n[USER PROFILE CONTEXT]")
-        print(f"  Genres: {user_profile.get('genres', [])[:10]}")
-        print(f"  Top Artists: {top_artists_names[:10]}")
-        print(f"  Top Tracks: {top_tracks_names[:10] if top_tracks_names else 'None'}")
-        print(f"  Audio Features:")
-        audio_features_avg = user_profile.get('audio_features_avg', {})
-        if audio_features_avg and len(audio_features_avg) > 0:
-            print(f"    - Energy: {audio_features_avg.get('energy', 0):.2f}")
-            print(f"    - Danceability: {audio_features_avg.get('danceability', 0):.2f}")
-            print(f"    - Valence (Mood): {audio_features_avg.get('valence', 0):.2f}")
-        else:
-            print(f"    ⚠️  Audio features not available (API may be restricted)")
-        print(f"\n[USER MESSAGE]")
-        print(f"  {user_message}")
-        print(f"\n[FULL USER CONTEXT SENT TO LLM]")
-        print(f"{context}")
-        print(f"\n[COMPLETE MESSAGES ARRAY]")
-        for i, msg in enumerate(messages):
-            role = msg.get('role', 'unknown')
-            content_preview = msg.get('content', '')[:200].replace('\n', ' ')
-            print(f"  {i+1}. {role}: {content_preview}...")
-        print(f"\n{'='*80}\n")
+        # Print complete prompt and context being sent to LLM (only in debug mode)
+        if DEBUG_MODE:
+            print(f"\n{'='*80}")
+            print(f"=== LLM PROMPT & CONTEXT ===")
+            print(f"{'='*80}")
+            print(f"\n[SYSTEM PROMPT]")
+            print(f"{system_prompt}")
+            print(f"\n[CONVERSATION HISTORY]")
+            if conversation_history and len(conversation_history) > 0:
+                for i, msg in enumerate(conversation_history):
+                    print(f"  {i+1}. {msg.get('role', 'unknown')}: {msg.get('content', '')[:100]}...")
+            else:
+                print(f"  (none)")
+            print(f"\n[USER PROFILE CONTEXT]")
+            print(f"  Genres: {user_profile.get('genres', [])[:10]}")
+            print(f"  Top Artists: {top_artists_names[:10]}")
+            print(f"  Top Tracks: {top_tracks_names[:10] if top_tracks_names else 'None'}")
+            print(f"  Audio Features:")
+            audio_features_avg = user_profile.get('audio_features_avg', {})
+            if audio_features_avg and len(audio_features_avg) > 0:
+                print(f"    - Energy: {audio_features_avg.get('energy', 0):.2f}")
+                print(f"    - Danceability: {audio_features_avg.get('danceability', 0):.2f}")
+                print(f"    - Valence (Mood): {audio_features_avg.get('valence', 0):.2f}")
+            else:
+                print(f"    ⚠️  Audio features not available (API may be restricted)")
+            print(f"\n[USER MESSAGE]")
+            print(f"  {user_message}")
+            print(f"\n[FULL USER CONTEXT SENT TO LLM]")
+            print(f"{context}")
+            print(f"\n[COMPLETE MESSAGES ARRAY]")
+            for i, msg in enumerate(messages):
+                role = msg.get('role', 'unknown')
+                content_preview = msg.get('content', '')[:200].replace('\n', ' ')
+                print(f"  {i+1}. {role}: {content_preview}...")
+            print(f"\n{'='*80}\n")
         
         try:
-            print(f"Calling Groq API with model: {self.model}")
+            if DEBUG_MODE:
+                print(f"Calling Groq API with model: {self.model}")
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.8,
-                max_tokens=1500  # Increased for JSON response
+                max_tokens=1500,  # Increased for JSON response
+                response_format={"type": "json_object"}  # Force JSON output
             )
             
             content = response.choices[0].message.content
-            print(f"Groq API response length: {len(content) if content else 0}")
+            if DEBUG_MODE:
+                print(f"Groq API response length: {len(content) if content else 0}")
             
             if not content:
                 raise ValueError(f"Groq API returned empty response. Check if model '{self.model}' is valid and available.")
@@ -164,8 +191,12 @@ Based on this profile and request, recommend exactly 20 songs that match their t
             print(f"  Error: {error_msg}")
             print(f"{'='*80}\n")
             
-            # Check if it's a model decommissioned error
-            if "decommissioned" in error_msg.lower() or "model" in error_msg.lower():
+            # Check if it's a rate limit error first (before checking for model errors)
+            if "rate_limit" in error_msg.lower() or "429" in error_msg or "rate limit" in error_msg.lower():
+                raise ValueError(f"Groq API rate limit reached. Please wait a few minutes or upgrade your tier. Error: {error_msg}")
+            
+            # Check if it's a model decommissioned/unavailable error
+            if "decommissioned" in error_msg.lower() or ("model" in error_msg.lower() and "not found" in error_msg.lower()):
                 raise ValueError(f"Model '{self.model}' is not available. Please check Groq's available models. Error: {error_msg}")
             raise
     
@@ -191,9 +222,94 @@ Based on this profile and request, recommend exactly 20 songs that match their t
         seed_tracks = response.choices[0].message.content.strip().split(',')
         return [track.strip() for track in seed_tracks]
     
+    def batch_score_lyrics_relevance(self, tracks_data, user_prompt):
+        """
+        Score multiple songs' lyrics in a single API call (more efficient)
+        
+        Args:
+            tracks_data: List of dicts with keys: 'lyrics', 'track_name', 'artist_name', 'track_id'
+            user_prompt: User's original request/prompt
+        
+        Returns:
+            Dict mapping track_id to score (0-10), or None if error
+        """
+        if not tracks_data:
+            return {}
+        
+        # Build batch prompt with all tracks
+        tracks_text = ""
+        for i, track in enumerate(tracks_data, 1):
+            lyrics = track.get('lyrics', '')
+            # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
+            lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
+            if len(lyrics) > 800:
+                lyrics_preview += "\n[... truncated ...]"
+            
+            tracks_text += f"""
+Track {i}: "{track['track_name']}" by {track['artist_name']}
+Lyrics:
+{lyrics_preview}
+
+"""
+        
+        prompt = f"""Rate how well each song's lyrics match the user's request on a scale of 0-10.
+
+User's Request: "{user_prompt}"
+
+{tracks_text}
+
+Consider for each track:
+- How well the themes, emotions, or messages in the lyrics align with the user's request
+- The relevance of the lyrical content to what they're looking for
+- The overall match quality
+
+Return your response as a JSON object with track numbers as keys and scores as values:
+{{"1": score, "2": score, "3": score, ...}}
+
+Return ONLY valid JSON, no other text."""
+
+        try:
+            if DEBUG_MODE:
+                print(f"    📊 Batch scoring {len(tracks_data)} tracks")
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,  # Lower temperature for more consistent scoring
+                max_tokens=100,
+                response_format={"type": "json_object"}  # Force JSON output
+            )
+            score_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            import json
+            scores_by_index = json.loads(score_text)
+            
+            # Map back to track IDs
+            scores_by_id = {}
+            for i, track in enumerate(tracks_data, 1):
+                score_key = str(i)
+                if score_key in scores_by_index:
+                    score = int(scores_by_index[score_key])
+                    # Clamp to 0-10
+                    score = max(0, min(10, score))
+                    scores_by_id[track['track_id']] = score
+                else:
+                    scores_by_id[track['track_id']] = 5  # Default if missing
+            
+            if DEBUG_MODE:
+                print(f"    ✅ Batch scored {len(scores_by_id)} tracks")
+            
+            return scores_by_id
+        except Exception as e:
+            print(f"    ❌ Error in batch scoring: {e}")
+            # Fallback: return default scores
+            return {track['track_id']: 5 for track in tracks_data}
+
     def score_lyrics_relevance(self, lyrics, track_name, artist_name, user_prompt):
         """
         Score how well song lyrics match the user's prompt (0-10 scale)
+        [DEPRECATED: Use batch_score_lyrics_relevance for better efficiency]
         
         Args:
             lyrics: Full lyrics text
@@ -204,9 +320,9 @@ Based on this profile and request, recommend exactly 20 songs that match their t
         Returns:
             Score (0-10) or None if error
         """
-        # Truncate lyrics if too long (keep first 1500 chars to reduce tokens)
-        lyrics_preview = lyrics[:1500] if len(lyrics) > 1500 else lyrics
-        if len(lyrics) > 1500:
+        # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
+        lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
+        if len(lyrics) > 800:
             lyrics_preview += "\n[... lyrics truncated ...]"
         
         prompt = f"""Rate how well these song lyrics match the user's request on a scale of 0-10.
@@ -259,9 +375,9 @@ Return ONLY a single number from 0-10 (where 10 is a perfect match), nothing els
         Returns:
             Tuple of (explanation string, highlighted_terms list) or (None, None) if error
         """
-        # Truncate lyrics if too long (keep first 2000 chars to avoid token limits)
-        lyrics_preview = lyrics[:2000] if len(lyrics) > 2000 else lyrics
-        if len(lyrics) > 2000:
+        # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
+        lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
+        if len(lyrics) > 800:
             lyrics_preview += "\n[... lyrics truncated ...]"
         
         prompt = f"""Analyze how these song lyrics relate to the user's request and explain why this song is a good match.
@@ -275,7 +391,7 @@ Lyrics:
 
 Provide:
 1. A brief, engaging explanation (2-3 sentences) of how the themes, emotions, or messages in these lyrics connect to the user's request and why this song is a perfect match.
-2. A list of specific words, phrases, or terms from the lyrics that directly relate to the user's request or preferences. These should be exact matches from the lyrics text.
+2. A list of specific words, phrases, or terms from the lyrics that directly relate to the user's request or preferences. These should be EXACT matches from the lyrics text.
 
 Return your response as a JSON object with this exact structure:
 {{
@@ -283,19 +399,26 @@ Return your response as a JSON object with this exact structure:
   "highlighted_terms": ["exact word or phrase from lyrics", "another term", "etc"]
 }}
 
-IMPORTANT:
-- The highlighted_terms should be exact words or phrases as they appear in the lyrics
+CRITICAL RULES FOR highlighted_terms:
+- Extract ONLY exact words or phrases as they appear in the lyrics text above
+- Do NOT include any explanation text, commentary, or descriptions
+- Do NOT include phrases like "is not present" or "terms like"
+- Each term must be a direct quote from the lyrics
 - Include 3-8 terms that are most relevant to the user's request
 - Terms can be single words or short phrases (2-4 words max)
+- Copy the terms exactly as they appear in the lyrics (preserve capitalization and spacing)
 - Return ONLY valid JSON, no other text"""
 
         try:
-            print(f"    🤖 Generating lyrics explanation for: {track_name}")
+            if DEBUG_MODE:
+                print(f"    🤖 Generating lyrics explanation for: {track_name}")
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=400
+                max_tokens=400,
+                response_format={"type": "json_object"}  # Force JSON output
             )
             response_text = response.choices[0].message.content.strip()
             
@@ -312,15 +435,35 @@ IMPORTANT:
                 if json_match:
                     result = json.loads(json_match.group())
                 else:
-                    print(f"    ⚠️ Could not parse JSON, using fallback")
+                    if DEBUG_MODE:
+                        print(f"    ⚠️ Could not parse JSON, using fallback")
                     # Fallback: use response as explanation, no highlighted terms
                     return response_text, []
             
             explanation = result.get('explanation', response_text)
             highlighted_terms = result.get('highlighted_terms', [])
             
-            print(f"    ✅ Generated explanation ({len(explanation)} chars)")
-            print(f"    ✅ Identified {len(highlighted_terms)} highlighted terms: {highlighted_terms[:5]}")
+            # Clean up highlighted terms - remove any that contain explanation text
+            # Filter out terms that look like they contain commentary or aren't from lyrics
+            cleaned_terms = []
+            for term in highlighted_terms:
+                if isinstance(term, str):
+                    # Remove terms that contain explanation markers
+                    if any(marker in term.lower() for marker in ['is not present', 'terms like', 'relate to', 'such as', 'including']):
+                        continue
+                    # Remove terms that are too long (likely explanation text)
+                    if len(term) > 50:
+                        continue
+                    # Clean and add
+                    cleaned_term = term.strip().strip('"').strip("'")
+                    if cleaned_term and len(cleaned_term) > 0:
+                        cleaned_terms.append(cleaned_term)
+            
+            highlighted_terms = cleaned_terms
+            
+            if DEBUG_MODE:
+                print(f"    ✅ Generated explanation ({len(explanation)} chars)")
+                print(f"    ✅ Identified {len(highlighted_terms)} highlighted terms: {highlighted_terms[:5]}")
             
             return explanation, highlighted_terms
         except Exception as e:

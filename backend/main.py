@@ -390,15 +390,51 @@ def get_playlist_tracks(playlist_id):
 
 @app.route('/track/<track_id>/audio_features')
 def get_audio_features(track_id):
+    """Audio features endpoint - tries to fetch from Spotify API, falls back to defaults"""
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
     
-    features = sp.audio_features([track_id])[0]
-    return features  # Returns danceability, energy, valence, etc.
+    try:
+        # Try to fetch audio features from Spotify API
+        audio_features = sp.audio_features([track_id])
+        if audio_features and audio_features[0]:
+            features = audio_features[0]
+            return {
+                'energy': features.get('energy'),
+                'danceability': features.get('danceability'),
+                'valence': features.get('valence'),
+                'tempo': features.get('tempo'),
+                'acousticness': features.get('acousticness'),
+                'instrumentalness': features.get('instrumentalness'),
+                'liveness': features.get('liveness'),
+                'speechiness': features.get('speechiness'),
+                'loudness': features.get('loudness')
+            }
+    except Exception as e:
+        # Handle 403 Forbidden (deprecated API) or other errors gracefully
+        error_msg = str(e)
+        if '403' in error_msg or 'Forbidden' in error_msg:
+            print(f"  ℹ️  Audio features API not available for track {track_id} (403 Forbidden)")
+        else:
+            print(f"  ⚠️  Error fetching audio features for track {track_id}: {e}")
+    
+    # Return default values if API is not available
+    return {
+        'energy': 0.5,
+        'danceability': 0.5,
+        'valence': 0.5,
+        'tempo': 120.0,
+        'acousticness': 0.5,
+        'instrumentalness': 0.5,
+        'liveness': 0.5,
+        'speechiness': 0.5,
+        'loudness': -10.0
+    }
 
 @app.route('/track/audio-features')
 def get_batch_audio_features():
+    """Batch audio features endpoint - tries to fetch from Spotify API, falls back to defaults"""
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
@@ -407,7 +443,63 @@ def get_batch_audio_features():
     if len(track_ids) > 100:
         return {'error': 'Maximum 100 tracks allowed'}, 400
     
-    features = sp.audio_features(track_ids)
+    try:
+        # Try to fetch audio features from Spotify API
+        audio_features = sp.audio_features(track_ids)
+        if audio_features and len(audio_features) > 0:
+            # Return actual audio features
+            features_list = []
+            for i, track_id in enumerate(track_ids):
+                if i < len(audio_features) and audio_features[i]:
+                    features = audio_features[i]
+                    features_list.append({
+                        'energy': features.get('energy'),
+                        'danceability': features.get('danceability'),
+                        'valence': features.get('valence'),
+                        'tempo': features.get('tempo'),
+                        'acousticness': features.get('acousticness'),
+                        'instrumentalness': features.get('instrumentalness'),
+                        'liveness': features.get('liveness'),
+                        'speechiness': features.get('speechiness'),
+                        'loudness': features.get('loudness')
+                    })
+                else:
+                    # Return defaults for tracks without features
+                    features_list.append({
+                        'energy': 0.5,
+                        'danceability': 0.5,
+                        'valence': 0.5,
+                        'tempo': 120.0,
+                        'acousticness': 0.5,
+                        'instrumentalness': 0.5,
+                        'liveness': 0.5,
+                        'speechiness': 0.5,
+                        'loudness': -10.0
+                    })
+            return {'audio_features': features_list}
+    except Exception as e:
+        # Handle 403 Forbidden (deprecated API) or other errors gracefully
+        error_msg = str(e)
+        if '403' in error_msg or 'Forbidden' in error_msg:
+            print(f"  ℹ️  Audio features API not available (403 Forbidden)")
+        else:
+            print(f"  ⚠️  Error fetching audio features: {e}")
+    
+    # Return default values if API is not available
+    default_features = {
+        'energy': 0.5,
+        'danceability': 0.5,
+        'valence': 0.5,
+        'tempo': 120.0,
+        'acousticness': 0.5,
+        'instrumentalness': 0.5,
+        'liveness': 0.5,
+        'speechiness': 0.5,
+        'loudness': -10.0
+    }
+    
+    # Return default features for each track
+    features = [default_features.copy() for _ in track_ids]
     return {'audio_features': features}
 
 @app.route('/get_top_tracks')
@@ -487,20 +579,9 @@ def get_user_profile():
         # Get playlists
         playlists = sp.current_user_playlists(limit=50)
         
-        # Get audio features for top tracks to analyze music taste
-        track_ids = [track['id'] for track in top_tracks_medium['items']]
-        audio_features = sp.audio_features(track_ids) if track_ids else []
-        
-        # Calculate average audio features
-        if audio_features and len(audio_features) > 0:
-            avg_features = {
-                'danceability': sum(f.get('danceability', 0) for f in audio_features) / len(audio_features),
-                'energy': sum(f.get('energy', 0) for f in audio_features) / len(audio_features),
-                'valence': sum(f.get('valence', 0) for f in audio_features) / len(audio_features),
-                'tempo': sum(f.get('tempo', 0) for f in audio_features) / len(audio_features)
-            }
-        else:
-            avg_features = {}
+        # Audio features are no longer available from Spotify API (deprecated Nov 2024)
+        # Return empty dict - will use database audio profile if available
+        avg_features = {}
         
         # Extract genres from top artists
         top_artists = sp.current_user_top_artists(time_range='medium_term', limit=20)
@@ -555,59 +636,10 @@ def get_user_profile_data(sp):
             artist_names = [a['name'] for a in top_artists['items'][:10]]
             print(f"  Top Artists: {artist_names}")
         
-        # Get audio features (may fail due to 403, but we'll handle it)
-        track_ids = [track['id'] for track in top_tracks['items']]
+        # Audio features are no longer available from Spotify API (deprecated Nov 2024)
+        # We'll use database-stored audio features from liked tracks instead
         avg_features = {}
-        
-        if not track_ids:
-            print(f"  ⚠️  No track IDs found - cannot fetch audio features")
-        else:
-            print(f"Fetching audio features for {len(track_ids)} tracks...")
-            print(f"  Track IDs: {track_ids[:5]}...")  # Show first 5 IDs
-            
-            try:
-                # Try fetching audio features in batches (Spotify limit is 100 per request)
-                audio_features = sp.audio_features(track_ids)
-                
-                print(f"  API Response type: {type(audio_features)}")
-                print(f"  API Response length: {len(audio_features) if audio_features else 0}")
-                
-                if audio_features and len(audio_features) > 0:
-                    # Filter out None values (tracks without features)
-                    valid_features = [f for f in audio_features if f and isinstance(f, dict)]
-                    print(f"  Valid features: {len(valid_features)} out of {len(audio_features)}")
-                    
-                    if valid_features:
-                        # Show sample of what we got
-                        sample_feature = valid_features[0]
-                        print(f"  Sample feature keys: {list(sample_feature.keys())[:5]}")
-                        print(f"  Sample feature values: energy={sample_feature.get('energy')}, danceability={sample_feature.get('danceability')}")
-                        
-                        avg_features = {
-                            'energy': sum(f.get('energy', 0) for f in valid_features) / len(valid_features),
-                            'danceability': sum(f.get('danceability', 0) for f in valid_features) / len(valid_features),
-                            'valence': sum(f.get('valence', 0) for f in valid_features) / len(valid_features)
-                        }
-                        print(f"  ✅ Calculated average audio features from {len(valid_features)} tracks:")
-                        print(f"     Energy: {avg_features['energy']:.3f}")
-                        print(f"     Danceability: {avg_features['danceability']:.3f}")
-                        print(f"     Valence: {avg_features['valence']:.3f}")
-                    else:
-                        print(f"  ❌ No valid audio features returned (all None or invalid)")
-                        print(f"     First few results: {audio_features[:3] if audio_features else 'None'}")
-                else:
-                    print(f"  ❌ Audio features API returned empty or None")
-                    print(f"     Response: {audio_features}")
-                    
-            except Exception as e:
-                print(f"  ❌ ERROR fetching audio features:")
-                print(f"     Error type: {type(e).__name__}")
-                print(f"     Error message: {str(e)}")
-                import traceback
-                print(f"     Full traceback:")
-                traceback.print_exc()
-                # Continue without audio features - this is OK, but we'll show 0
-                avg_features = {}
+        print(f"  ℹ️  Skipping Spotify audio features API (deprecated) - will use database audio profile if available")
         
         # Extract genres from artists
         genres = []
@@ -737,13 +769,31 @@ def dj_recommend():
             print(f"❌ Failed to get user profile: {e}")
             return jsonify({"error": str(e)}), 500
         
+        # Get audio profile from database (liked tracks) as fallback
+        try:
+            clerk_id = get_clerk_user_id()
+            if chat_db:
+                db_audio_profile = chat_db.get_user_audio_profile(clerk_id)
+                if db_audio_profile:
+                    user_profile['db_audio_profile'] = db_audio_profile
+                    print(f"✅ Loaded database audio profile: {db_audio_profile['track_count']} liked tracks")
+                    print(f"   Energy: {db_audio_profile.get('energy', 0):.2f}, "
+                          f"Danceability: {db_audio_profile.get('danceability', 0):.2f}, "
+                          f"Valence: {db_audio_profile.get('valence', 0):.2f}")
+                else:
+                    print("⚠️  No database audio profile available (user has no liked tracks with audio features)")
+        except Exception as e:
+            print(f"⚠️  Could not load database audio profile: {e}")
+            # Continue without database profile
+        
         # Log user profile data
         print(f"\n=== USER PROFILE DATA ===")
         print(f"User message: {user_message}")
         print(f"Genres: {user_profile.get('genres', [])[:10]}")
         print(f"Top Artists: {[a['name'] for a in user_profile.get('top_artists', [])[:5]]}")
         print(f"Top Tracks: {[t['name'] for t in user_profile.get('top_tracks', [])[:5]]}")
-        print(f"Audio Features: {user_profile.get('audio_features_avg', {})}")
+        print(f"Audio Features (Spotify): {user_profile.get('audio_features_avg', {})}")
+        print(f"Audio Features (Database): {user_profile.get('db_audio_profile', {})}")
         print(f"=========================\n")
         
         # Get conversation history
@@ -775,11 +825,60 @@ def dj_recommend():
             json_match = re.search(r'\{.*\}', ai_response_raw, re.DOTALL)
             if json_match:
                 try:
-                    ai_response_json = json.loads(json_match.group())
+                    json_str = json_match.group()
+                    # Try to fix common JSON issues: unescaped quotes in strings
+                    # This is a simple fix - replace unescaped quotes in string values
+                    # More robust would be to use a JSON repair library, but this should handle most cases
+                    ai_response_json = json.loads(json_str)
                 except json.JSONDecodeError as e2:
                     print(f"Failed to parse extracted JSON: {e2}")
-                    print(f"Extracted text: {json_match.group()[:200]}")
-                    raise ValueError(f"Could not parse JSON from LLM response. Response was: {ai_response_raw[:500]}")
+                    print(f"Extracted text: {json_str[:500]}")
+                    # Try to manually fix common issues
+                    try:
+                        # Replace unescaped quotes in the intro field
+                        fixed_json = re.sub(
+                            r'"intro":\s*"([^"]*(?:\\.[^"]*)*)"',
+                            lambda m: f'"intro": {json.dumps(m.group(1))}',
+                            json_str,
+                            flags=re.DOTALL
+                        )
+                        ai_response_json = json.loads(fixed_json)
+                        print("✅ Fixed JSON by escaping quotes in intro field")
+                    except Exception as e3:
+                        print(f"Failed to fix JSON: {e3}")
+                        # Last resort: try to extract just the intro and songs manually
+                        # More flexible regex to handle unescaped quotes
+                        intro_match = re.search(r'"intro":\s*"((?:[^"\\]|\\.|"(?!"))*(?:"|$))', json_str, re.DOTALL)
+                        if not intro_match:
+                            # Try even more flexible: find intro field and extract until we hit ", "songs"
+                            intro_start = json_str.find('"intro":')
+                            if intro_start != -1:
+                                intro_start = json_str.find('"', intro_start + 8) + 1
+                                songs_start = json_str.find('"songs":', intro_start)
+                                if songs_start != -1:
+                                    intro_text = json_str[intro_start:songs_start-2].strip().rstrip('",')
+                                    # Clean up the intro text
+                                    intro_text = intro_text.strip('"').replace('\\"', '"').replace('\\n', '\n')
+                                    intro_match = type('obj', (object,), {'group': lambda self, n: intro_text if n == 1 else None})()
+                        
+                        songs_match = re.search(r'"songs":\s*\[(.*?)\]', json_str, re.DOTALL)
+                        
+                        if intro_match and songs_match:
+                            intro_text = intro_match.group(1) if hasattr(intro_match, 'group') else intro_match
+                            intro_text = intro_text.replace('\\"', '"').replace('\\n', '\n').strip('"')
+                            # Try to parse songs array
+                            try:
+                                songs_str = '[' + songs_match.group(1) + ']'
+                                songs = json.loads(songs_str)
+                                ai_response_json = {"intro": intro_text, "songs": songs}
+                                print("✅ Manually extracted intro and songs")
+                            except Exception as e4:
+                                print(f"Failed to parse songs: {e4}")
+                                # If songs parsing fails, at least return the intro
+                                ai_response_json = {"intro": intro_text, "songs": []}
+                                print("⚠️  Extracted intro but failed to parse songs, using empty list")
+                        else:
+                            raise ValueError(f"Could not parse JSON from LLM response. Response was: {ai_response_raw[:500]}")
             else:
                 raise ValueError(f"Could not find JSON in LLM response. Response was: {ai_response_raw[:500]}")
         
@@ -907,164 +1006,209 @@ def dj_recommend():
         print(f"Found {found_count} out of {len(llm_songs)} recommended songs")
         print(f"==============================\n")
         
-        # Fetch audio features for all found tracks
+        # Try to fetch audio features for recommended tracks
+        # Note: Audio features API may not be available for new apps (deprecated Nov 2024)
+        # But we'll try anyway and gracefully handle errors
+        print(f"\n=== FETCHING AUDIO FEATURES FOR RECOMMENDED TRACKS ===")
         if tracks:
             track_ids = [track['id'] for track in tracks]
             try:
+                # Try to fetch audio features in batches (Spotify limit is 100 per request)
                 audio_features = sp.audio_features(track_ids)
-                print(f"\n=== FETCHING AUDIO FEATURES ===")
-                print(f"Fetching audio features for {len(track_ids)} tracks")
+                print(f"  Attempting to fetch audio features for {len(track_ids)} tracks...")
                 
-                # Create a mapping of track_id to audio features
-                features_map = {}
-                for i, track_id in enumerate(track_ids):
-                    if audio_features and i < len(audio_features) and audio_features[i]:
-                        features_map[track_id] = audio_features[i]
-                
-                # Add audio features to each track
-                for track in tracks:
-                    if track['id'] in features_map:
-                        features = features_map[track['id']]
-                        track['audio_features'] = {
-                            'energy': features.get('energy'),
-                            'danceability': features.get('danceability'),
-                            'valence': features.get('valence'),
-                            'tempo': features.get('tempo'),
-                            'acousticness': features.get('acousticness'),
-                            'instrumentalness': features.get('instrumentalness'),
-                            'liveness': features.get('liveness'),
-                            'speechiness': features.get('speechiness'),
-                            'loudness': features.get('loudness')
-                        }
-                        print(f"  ✓ Added audio features for: {track['name']}")
-                    else:
-                        print(f"  ✗ No audio features available for: {track['name']}")
-                        track['audio_features'] = None
-                
-                print(f"===============================\n")
-                
-                # Filter tracks based on user's audio feature preferences
-                print(f"\n=== FILTERING TRACKS BY AUDIO FEATURES ===")
-                user_avg = user_profile.get('audio_features_avg', {})
-                
-                # Check if user has audio features available
-                if not user_avg or len(user_avg) == 0:
-                    print(f"⚠️  User audio features not available - skipping audio feature filtering")
-                    print(f"   Will use all found tracks (no filtering by audio features)")
-                    # Just use all tracks without filtering
-                    tracks = tracks[:10] if len(tracks) > 10 else tracks
-                    for i, track in enumerate(tracks, 1):
-                        track['position'] = i
-                else:
-                    # User has audio features - proceed with filtering
-                    user_energy = user_avg.get('energy', 0.5)
-                    user_danceability = user_avg.get('danceability', 0.5)
-                    user_valence = user_avg.get('valence', 0.5)
+                if audio_features and len(audio_features) > 0:
+                    # Create a mapping of track_id to audio features
+                    features_map = {}
+                    for i, track_id in enumerate(track_ids):
+                        if audio_features and i < len(audio_features) and audio_features[i]:
+                            features_map[track_id] = audio_features[i]
                     
-                    print(f"User's average preferences:")
-                    print(f"  Energy: {user_energy:.2f}")
-                    print(f"  Danceability: {user_danceability:.2f}")
-                    print(f"  Valence: {user_valence:.2f}")
-                    
-                    # Calculate match score for each track
-                    tracks_with_scores = []
+                    # Add audio features to each track
+                    features_count = 0
                     for track in tracks:
-                        if track.get('audio_features'):
-                            features = track['audio_features']
-                            track_energy = features.get('energy', 0.5) or 0.5
-                            track_danceability = features.get('danceability', 0.5) or 0.5
-                            track_valence = features.get('valence', 0.5) or 0.5
-                            
-                            # Calculate weighted match score (lower difference = better match)
-                            # Weight: energy and danceability are more important
-                            energy_diff = abs(track_energy - user_energy)
-                            danceability_diff = abs(track_danceability - user_danceability)
-                            valence_diff = abs(track_valence - user_valence)
-                            
-                            # Match score: lower is better (0 = perfect match, 1 = worst match)
-                            match_score = (
-                                energy_diff * 0.4 +      # 40% weight on energy
-                                danceability_diff * 0.4 +  # 40% weight on danceability
-                                valence_diff * 0.2         # 20% weight on valence
-                            )
-                            
-                            track['match_score'] = match_score
-                            tracks_with_scores.append(track)
+                        if track['id'] in features_map:
+                            features = features_map[track['id']]
+                            track['audio_features'] = {
+                                'energy': features.get('energy'),
+                                'danceability': features.get('danceability'),
+                                'valence': features.get('valence'),
+                                'tempo': features.get('tempo'),
+                                'acousticness': features.get('acousticness'),
+                                'instrumentalness': features.get('instrumentalness'),
+                                'liveness': features.get('liveness'),
+                                'speechiness': features.get('speechiness'),
+                                'loudness': features.get('loudness')
+                            }
+                            features_count += 1
+                            print(f"  ✅ Added audio features for: {track['name']}")
                         else:
-                            # Tracks without audio features get a penalty score
-                            track['match_score'] = 1.0
-                            tracks_with_scores.append(track)
+                            print(f"  ⚠️ No audio features available for: {track['name']}")
+                            track['audio_features'] = None
                     
-                    # Sort by match score (best matches first)
-                    tracks_with_scores.sort(key=lambda x: x.get('match_score', 1.0))
-                    
-                    # Keep all tracks for now - we'll filter to 8 later based on lyrics
-                    selected_tracks = tracks_with_scores
-                    
-                    print(f"\nAudio feature filtering: {len(selected_tracks)} tracks (will filter to 8 after lyrics analysis)")
-                    for i, track in enumerate(selected_tracks[:10], 1):
-                        match_score = track.get('match_score', 1.0)
-                        features = track.get('audio_features', {})
-                        print(f"  {i}. {track['name']} - Match: {match_score:.3f} "
-                              f"(E:{features.get('energy', 0):.2f}, D:{features.get('danceability', 0):.2f}, V:{features.get('valence', 0):.2f})")
-                    
-                    # Don't update positions yet - we'll do that after lyrics filtering
-                    tracks = selected_tracks
-                    print(f"===============================\n")
-                
+                    print(f"  ✅ Successfully fetched audio features for {features_count}/{len(tracks)} tracks")
+                else:
+                    print(f"  ⚠️ Audio features API returned empty response")
+                    for track in tracks:
+                        track['audio_features'] = None
+                        
             except Exception as e:
-                print(f"Error fetching audio features: {e}")
-                # Continue without audio features if there's an error
+                # Handle 403 Forbidden (deprecated API) or other errors gracefully
+                error_msg = str(e)
+                if '403' in error_msg or 'Forbidden' in error_msg:
+                    print(f"  ℹ️  Audio features API not available (403 Forbidden - likely deprecated for new apps)")
+                    print(f"  ℹ️  Will use database audio profile for similarity scoring")
+                else:
+                    print(f"  ⚠️  Error fetching audio features: {e}")
+                    print(f"  ℹ️  Will continue without audio features")
+                
+                # Set audio_features to None for all tracks
                 for track in tracks:
                     track['audio_features'] = None
+        
+        print(f"===============================\n")
+        
+        # Filter tracks based on user's audio feature preferences
+        print(f"\n=== FILTERING TRACKS BY AUDIO FEATURES ===")
+        user_avg = user_profile.get('audio_features_avg', {})
+        
+        # If Spotify API doesn't have audio features, try database profile
+        if not user_avg or len(user_avg) == 0:
+            db_audio_profile = user_profile.get('db_audio_profile')
+            if db_audio_profile and db_audio_profile.get('track_count', 0) > 0:
+                # Use database averages
+                user_avg = {
+                    'energy': db_audio_profile.get('energy'),
+                    'danceability': db_audio_profile.get('danceability'),
+                    'valence': db_audio_profile.get('valence')
+                }
+                print(f"✅ Using database audio profile for similarity scoring (from {db_audio_profile['track_count']} liked tracks)")
+        
+        # Check if user has audio features available (from Spotify or database)
+        if not user_avg or len(user_avg) == 0:
+            print(f"⚠️  User audio features not available - skipping audio feature filtering")
+            print(f"   Will use all found tracks (no filtering by audio features)")
+            # Just use all tracks without filtering
+            tracks = tracks[:10] if len(tracks) > 10 else tracks
+            for i, track in enumerate(tracks, 1):
+                track['position'] = i
+        else:
+            # User has audio features - proceed with filtering
+            user_energy = user_avg.get('energy', 0.5)
+            user_danceability = user_avg.get('danceability', 0.5)
+            user_valence = user_avg.get('valence', 0.5)
+            
+            print(f"User's average preferences:")
+            print(f"  Energy: {user_energy:.2f}")
+            print(f"  Danceability: {user_danceability:.2f}")
+            print(f"  Valence: {user_valence:.2f}")
+            
+            # Check if tracks have audio features available
+            tracks_with_features = [t for t in tracks if t.get('audio_features')]
+            
+            if tracks_with_features and len(tracks_with_features) > 0:
+                # We have audio features for some or all tracks - use them for filtering
+                print(f"✅ Found {len(tracks_with_features)} tracks with audio features")
+                print(f"   Calculating match scores based on audio features...")
                 
-                # If we can't filter by audio features, keep all tracks for lyrics filtering
-                # We'll filter to 8 later based on lyrics
+                # Calculate match score for each track
+                tracks_with_scores = []
                 for track in tracks:
-                    track['match_score'] = 0.5  # Default match score
+                    if track.get('audio_features'):
+                        features = track['audio_features']
+                        track_energy = features.get('energy', 0.5) or 0.5
+                        track_danceability = features.get('danceability', 0.5) or 0.5
+                        track_valence = features.get('valence', 0.5) or 0.5
+                        
+                        # Calculate weighted match score (lower difference = better match)
+                        energy_diff = abs(track_energy - user_energy)
+                        danceability_diff = abs(track_danceability - user_danceability)
+                        valence_diff = abs(track_valence - user_valence)
+                        
+                        # Match score: lower is better (0 = perfect match, 1 = worst match)
+                        match_score = (
+                            energy_diff * 0.4 +      # 40% weight on energy
+                            danceability_diff * 0.4 +  # 40% weight on danceability
+                            valence_diff * 0.2         # 20% weight on valence
+                        )
+                        
+                        track['match_score'] = match_score
+                        tracks_with_scores.append(track)
+                        print(f"  {track['name']}: Energy={track_energy:.2f}, Danceability={track_danceability:.2f}, Valence={track_valence:.2f}, Match={match_score:.3f}")
+                    else:
+                        # Track without audio features gets a penalty score
+                        track['match_score'] = 1.0
+                        tracks_with_scores.append(track)
+                        print(f"  {track['name']}: No audio features (match_score=1.0)")
+                
+                # Sort by match score (best matches first)
+                tracks_with_scores.sort(key=lambda x: x.get('match_score', 1.0))
+                
+                # Keep all tracks for now - we'll score and keep top 8 based on lyrics
+                tracks = tracks_with_scores
+                print(f"\n✅ Audio feature filtering complete - {len(tracks)} tracks sorted by match score")
+            else:
+                # No audio features available - skip audio feature filtering
+                print(f"⚠️  Tracks don't have audio features (Spotify API may not be available)")
+                print(f"   Using all tracks without audio feature filtering")
+                tracks = tracks[:10] if len(tracks) > 10 else tracks
+                for i, track in enumerate(tracks, 1):
+                    track['position'] = i
+            
+            print(f"===============================\n")
         
         # If we found fewer than 5 tracks, add a warning
         if len(tracks) < 5:
             print(f"WARNING: Only found {len(tracks)} tracks. Consider adding fallback logic.")
         
-        # Fetch lyrics for all tracks first, then score and filter to top 8
-        print(f"\n=== FETCHING LYRICS & SCORING RELEVANCE ===")
-        tracks_with_scores = []
+        # Fetch lyrics for all tracks (should be 8), then batch score
+        print(f"\n=== FETCHING LYRICS & BATCH SCORING RELEVANCE ===")
+        print(f"Processing {len(tracks)} tracks (expecting 8)")
         
-        for track in tracks:
+        # First, fetch all lyrics
+        tracks_with_lyrics = []
+        for i, track in enumerate(tracks, 1):
+            print(f"\n[{i}/{len(tracks)}] Fetching lyrics: {track['name']} by {track['artist']}")
+            
             try:
-                # Fetch lyrics
                 lyrics = get_lyrics(track['name'], track['artist'])
                 
                 if lyrics:
-                    # Debug: Print lyrics in console
-                    print(f"\n📝 LYRICS FOR: {track['name']} by {track['artist']}")
-                    print(f"{'='*60}")
-                    print(lyrics[:500] + "..." if len(lyrics) > 500 else lyrics)  # Print first 500 chars
-                    print(f"{'='*60}\n")
-                    
+                    print(f"  ✅ Lyrics found ({len(lyrics)} chars)")
                     track['lyrics'] = lyrics
-                    
-                    # Score lyrics relevance (0-10)
-                    lyrics_score = ai_service.score_lyrics_relevance(
-                        lyrics=lyrics,
-                        track_name=track['name'],
-                        artist_name=track['artist'],
-                        user_prompt=user_message
-                    )
-                    track['lyrics_score'] = lyrics_score
-                    print(f"  📊 Lyrics relevance score: {lyrics_score}/10")
+                    tracks_with_lyrics.append(track)
                 else:
+                    print(f"  ⚠️ No lyrics available, using default score")
                     track['lyrics'] = None
-                    track['lyrics_score'] = 0  # No lyrics = 0 score
-                    print(f"  ⚠️ {track['name']}: No lyrics available (score: 0)")
-                
-                tracks_with_scores.append(track)
+                    track['lyrics_score'] = 5  # Default score for no lyrics
             except Exception as e:
-                print(f"  ✗ Error processing {track['name']}: {e}")
+                print(f"  ❌ Error fetching lyrics: {e}")
                 track['lyrics'] = None
-                track['lyrics_score'] = 0
-                tracks_with_scores.append(track)
+                track['lyrics_score'] = 5  # Default score on error
+        
+        # Batch score all tracks with lyrics in a single API call
+        if tracks_with_lyrics:
+            print(f"\n📊 Batch scoring {len(tracks_with_lyrics)} tracks with lyrics...")
+            batch_data = [
+                {
+                    'track_id': track['id'],
+                    'lyrics': track['lyrics'],
+                    'track_name': track['name'],
+                    'artist_name': track['artist']
+                }
+                for track in tracks_with_lyrics
+            ]
+            
+            scores_by_id = ai_service.batch_score_lyrics_relevance(batch_data, user_message)
+            
+            # Apply scores to tracks
+            for track in tracks:
+                if track['id'] in scores_by_id:
+                    track['lyrics_score'] = scores_by_id[track['id']]
+                    print(f"  📊 {track['name']}: lyrics score {track['lyrics_score']}/10")
+        
+        # Collect all tracks
+        tracks_with_scores = tracks
         
         # Combine audio feature match score with lyrics score
         print(f"\n=== COMBINING AUDIO FEATURES & LYRICS SCORES ===")
@@ -1083,7 +1227,7 @@ def dj_recommend():
             
             print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score:.1f}, Combined={combined_score:.1f}")
         
-        # Sort by combined score (highest first) and take top 8
+        # Sort by combined score (highest first) and take top 8 (safety measure in case we got more than 8)
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
         selected_tracks = tracks_with_scores[:8]
         
@@ -1093,23 +1237,37 @@ def dj_recommend():
         
         # Generate explanations only for the final 8 selected tracks
         print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS ===")
-        for track in selected_tracks:
+        print(f"Processing {len(selected_tracks)} tracks for explanations...")
+        for i, track in enumerate(selected_tracks, 1):
+            print(f"\n[{i}/{len(selected_tracks)}] Generating explanation for: {track['name']} by {track['artist']}")
             if track.get('lyrics'):
-                explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
-                    lyrics=track['lyrics'],
-                    track_name=track['name'],
-                    artist_name=track['artist'],
-                    user_prompt=user_message
-                )
-                track['lyrics_explanation'] = explanation
-                track['highlighted_terms'] = highlighted_terms if highlighted_terms else []
-                if explanation:
-                    print(f"  ✅ {track['name']}: Generated explanation with {len(highlighted_terms) if highlighted_terms else 0} highlighted terms")
-                else:
-                    print(f"  ⚠️ {track['name']}: Failed to generate explanation")
+                try:
+                    explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
+                        lyrics=track['lyrics'],
+                        track_name=track['name'],
+                        artist_name=track['artist'],
+                        user_prompt=user_message
+                    )
+                    track['lyrics_explanation'] = explanation
+                    track['highlighted_terms'] = highlighted_terms if highlighted_terms else []
+                    if explanation:
+                        print(f"  ✅ Generated explanation ({len(explanation)} chars) with {len(highlighted_terms) if highlighted_terms else 0} highlighted terms")
+                        if highlighted_terms:
+                            print(f"     Highlighted terms: {highlighted_terms[:5]}")
+                    else:
+                        print(f"  ⚠️ Failed to generate explanation (returned None)")
+                except Exception as e:
+                    print(f"  ❌ Error generating explanation: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    track['lyrics_explanation'] = None
+                    track['highlighted_terms'] = []
             else:
+                print(f"  ⚠️ No lyrics available for explanation")
                 track['lyrics_explanation'] = None
                 track['highlighted_terms'] = []
+        
+        print(f"\n✅ Finished generating explanations for {len(selected_tracks)} tracks")
         
         # Update positions for final tracks
         for i, track in enumerate(selected_tracks, 1):
@@ -1210,7 +1368,7 @@ def message_feedback():
 
 @app.route('/track_like', methods=['POST'])
 def track_like():
-    """Toggle track like (add or remove)"""
+    """Toggle track like (add or remove) - fetches and stores audio features and highlighted_terms when liking"""
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
@@ -1223,16 +1381,38 @@ def track_like():
         track_name = data.get('track_name')
         track_artist = data.get('track_artist')
         track_image_url = data.get('track_image_url')
+        highlighted_terms = data.get('highlighted_terms')  # List of highlighted terms from lyrics
         
         if not track_id or not track_name or not track_artist:
             return jsonify({"error": "track_id, track_name, and track_artist are required"}), 400
         
+        # Check if we're liking (adding) or unliking (removing)
+        # We need to check before toggling to know if we should fetch audio features
+        is_currently_liked = chat_db.is_track_liked(clerk_id, track_id)
+        
+        # Audio features are no longer available from Spotify API (deprecated Nov 2024)
+        # Set to None - audio features will be populated from database when available
+        energy = None
+        danceability = None
+        valence = None
+        
+        if not is_currently_liked:
+            print(f"ℹ️  Audio features not available from Spotify API (deprecated) - storing track without features")
+            print(f"   Audio features will be available once user has liked tracks with features in database")
+            if highlighted_terms:
+                print(f"   Storing {len(highlighted_terms)} highlighted terms for track: {track_name}")
+        
+        # Toggle the like (with audio features and highlighted_terms if provided)
         is_liked = chat_db.toggle_track_like(
             user_id=clerk_id,  # Use Clerk ID
             track_id=track_id,
             track_name=track_name,
             track_artist=track_artist,
-            track_image_url=track_image_url
+            track_image_url=track_image_url,
+            energy=energy,
+            danceability=danceability,
+            valence=valence,
+            highlighted_terms=highlighted_terms
         )
         
         if is_liked is not None:
@@ -1242,6 +1422,8 @@ def track_like():
             
     except Exception as e:
         print(f"Error in track_like: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/chat_history', methods=['GET'])
@@ -1391,6 +1573,33 @@ def get_liked_track_ids():
         
     except Exception as e:
         print(f"Error in get_liked_track_ids: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/frequently_liked_terms', methods=['GET'])
+def get_frequently_liked_terms():
+    """Get highlighted terms that appear frequently in liked tracks"""
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    
+    try:
+        # Get Clerk user ID from header
+        clerk_id = get_clerk_user_id()
+        
+        # Get min_occurrences from query params (default: 2)
+        min_occurrences = int(request.args.get('min_occurrences', 2))
+        
+        frequently_liked_terms = chat_db.get_frequently_liked_terms(clerk_id, min_occurrences=min_occurrences)
+        
+        # Convert set to list for JSON serialization
+        return jsonify({
+            "terms": list(frequently_liked_terms),
+            "count": len(frequently_liked_terms)
+        })
+        
+    except Exception as e:
+        print(f"Error in get_frequently_liked_terms: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
