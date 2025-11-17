@@ -769,10 +769,29 @@ def dj_recommend():
             print(f"❌ Failed to get user profile: {e}")
             return jsonify({"error": str(e)}), 500
         
-        # Get audio profile from database (liked tracks) as fallback
+        # Get Clerk user ID for database operations
+        clerk_id = None
         try:
             clerk_id = get_clerk_user_id()
-            if chat_db:
+        except Exception as e:
+            print(f"⚠️  Could not get Clerk user ID: {e}")
+        
+        # Get previously recommended tracks for similar prompts (to avoid duplicates)
+        previously_recommended_track_ids = set()
+        if chat_db and clerk_id:
+            try:
+                previously_recommended_track_ids = chat_db.get_previously_recommended_tracks(
+                    user_id=clerk_id,
+                    user_message=user_message,
+                    similarity_threshold=0.7  # 70% word overlap threshold
+                )
+            except Exception as e:
+                print(f"⚠️  Could not load previously recommended tracks: {e}")
+                # Continue without duplicate prevention
+        
+        # Get audio profile from database (liked tracks) as fallback
+        if chat_db and clerk_id:
+            try:
                 db_audio_profile = chat_db.get_user_audio_profile(clerk_id)
                 if db_audio_profile:
                     user_profile['db_audio_profile'] = db_audio_profile
@@ -782,9 +801,9 @@ def dj_recommend():
                           f"Valence: {db_audio_profile.get('valence', 0):.2f}")
                 else:
                     print("⚠️  No database audio profile available (user has no liked tracks with audio features)")
-        except Exception as e:
-            print(f"⚠️  Could not load database audio profile: {e}")
-            # Continue without database profile
+            except Exception as e:
+                print(f"⚠️  Could not load database audio profile: {e}")
+                # Continue without database profile
         
         # Log user profile data
         print(f"\n=== USER PROFILE DATA ===")
@@ -902,8 +921,17 @@ def dj_recommend():
             country = None
         
         # Search Spotify for each recommended song
+        # Exclude previously recommended tracks to avoid duplicates
         tracks = []
         found_count = 0
+        skipped_duplicates = 0
+        
+        print(f"\n=== CHECKING FOR PREVIOUSLY RECOMMENDED TRACKS ===")
+        if previously_recommended_track_ids:
+            print(f"⚠️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - will exclude duplicates")
+        else:
+            print(f"ℹ️  No similar prompts found - all recommendations will be new")
+        print(f"================================================\n")
         
         for song_data in llm_songs:
             title = song_data.get('title', '').strip()
@@ -926,6 +954,14 @@ def dj_recommend():
                 
                 if search_results['tracks']['items']:
                     track = search_results['tracks']['items'][0]
+                    track_id = track['id']
+                    
+                    # Skip if this track was previously recommended for a similar prompt
+                    if track_id in previously_recommended_track_ids:
+                        skipped_duplicates += 1
+                        print(f"  ⏭️  Skipped (previously recommended): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
+                        continue
+                    
                     found_count += 1
                     
                     preview_url = track.get('preview_url')
@@ -966,6 +1002,14 @@ def dj_recommend():
                     
                     if search_results['tracks']['items']:
                         track = search_results['tracks']['items'][0]
+                        track_id = track['id']
+                        
+                        # Skip if this track was previously recommended for a similar prompt
+                        if track_id in previously_recommended_track_ids:
+                            skipped_duplicates += 1
+                            print(f"  ⏭️  Skipped (previously recommended): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
+                            continue
+                        
                         found_count += 1
                         
                         preview_url = track.get('preview_url')
@@ -1004,6 +1048,8 @@ def dj_recommend():
         
         print(f"\n=== SPOTIFY SEARCH RESULTS ===")
         print(f"Found {found_count} out of {len(llm_songs)} recommended songs")
+        if skipped_duplicates > 0:
+            print(f"Skipped {skipped_duplicates} duplicate(s) from similar prompts")
         print(f"==============================\n")
         
         # Try to fetch audio features for recommended tracks

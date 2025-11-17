@@ -3,26 +3,35 @@
 import { Button } from '@/components/ui/button';
 import { ArrowDownIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
-import { useCallback } from 'react';
+import { useCallback, forwardRef } from 'react';
 import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom';
 import { cn } from '@/lib/utils';
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
-  <StickToBottom
-    className={cn('relative flex-1 overflow-y-auto no-scrollbar', className)}
-    initial="smooth"
-    resize="smooth"
-    role="log"
-    style={{ 
-      overscrollBehavior: 'contain',
-      scrollBehavior: 'smooth',
-      ...props.style 
-    }}
-    {...props}
-  />
+export const Conversation = forwardRef<HTMLDivElement, ConversationProps>(
+  ({ className, ...props }, ref) => {
+    // Extract ref from props if provided
+    const { style, ...restProps } = props;
+    
+    return (
+      <StickToBottom
+        className={cn('relative flex-1 overflow-y-auto no-scrollbar', className)}
+        initial="smooth"
+        resize="smooth"
+        role="log"
+        style={{ 
+          overscrollBehavior: 'none', // Prevent overscroll bounce
+          scrollBehavior: 'smooth',
+          ...style 
+        }}
+        {...restProps}
+      />
+    );
+  }
 );
+
+Conversation.displayName = 'Conversation';
 
 export type ConversationContentProps = ComponentProps<
   typeof StickToBottom.Content

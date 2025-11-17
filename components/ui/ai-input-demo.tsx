@@ -1,6 +1,7 @@
 "use client";
 
 import { AIInputWithLoading } from "@/components/ui/ai-input-with-loading";
+import { ChatGPTPromptInput } from "@/components/ui/chatgpt-prompt-input";
 import { useState, useEffect, Fragment, useRef } from "react";
 import { motion } from "framer-motion";
 import AILoadingState from "@/components/kokonutui/ai-loading";
@@ -61,6 +62,9 @@ export function AIInputWithLoadingDemo({
   // Track if history has been loaded to prevent overwriting new messages
   const historyLoadedRef = useRef(false);
   const hasNewMessagesRef = useRef(false);
+  
+  // Ref for scroll container to prevent scrolling past top
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   
   // Load frequently liked terms
   const loadFrequentlyLikedTerms = async () => {
@@ -438,6 +442,66 @@ export function AIInputWithLoadingDemo({
     }
   }, [isLoadingHistory]);
 
+  // Compute hasMessages (used in multiple places)
+  const hasMessages = messages.length > 0 || isSubmitting;
+
+  // Prevent scrolling past the top (like ChatGPT)
+  // MUST be before any early returns to maintain hook order
+  useEffect(() => {
+    if (!hasMessages) return;
+    
+    // Find the actual scrollable element (StickToBottom creates a wrapper)
+    const findScrollContainer = () => {
+      if (scrollContainerRef.current) {
+        // Try to find the scrollable div inside StickToBottom
+        const scrollable = scrollContainerRef.current.querySelector('[role="log"]') as HTMLElement;
+        return scrollable || scrollContainerRef.current;
+      }
+      return null;
+    };
+
+    const scrollContainer = findScrollContainer();
+    if (!scrollContainer) return;
+
+    let lastScrollTop = scrollContainer.scrollTop;
+
+    const handleScroll = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!target) return;
+
+      const currentScrollTop = target.scrollTop;
+      
+      // If scrolling up and at the top, prevent further scrolling
+      if (currentScrollTop <= 0 && lastScrollTop <= 0) {
+        // Prevent overscroll at top
+        if (target.scrollTop < 0) {
+          target.scrollTop = 0;
+        }
+      }
+      
+      lastScrollTop = currentScrollTop;
+    };
+
+    // Handle wheel events to prevent overscroll
+    const handleWheel = (e: WheelEvent) => {
+      const target = scrollContainer;
+      if (!target) return;
+
+      // If at top and scrolling up, prevent default
+      if (target.scrollTop <= 0 && e.deltaY < 0) {
+        e.preventDefault();
+        target.scrollTop = 0;
+      }
+    };
+
+    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+    scrollContainer.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      scrollContainer.removeEventListener('scroll', handleScroll);
+      scrollContainer.removeEventListener('wheel', handleWheel);
+    };
+  }, [hasMessages]);
 
   const simulateResponse = async (message: string) => {
     setIsSubmitting(true);
@@ -543,6 +607,7 @@ export function AIInputWithLoadingDemo({
   };
 
   // Show loading indicator while loading history
+  // This early return is AFTER all hooks to maintain hook order
   if (isLoadingHistory) {
     return (
       <div className="flex flex-col h-screen items-center justify-center">
@@ -555,8 +620,6 @@ export function AIInputWithLoadingDemo({
       </div>
     );
   }
-
-  const hasMessages = messages.length > 0 || isSubmitting;
 
   // Handle Spotify connect button click
   const handleSpotifyConnect = () => {
@@ -575,12 +638,14 @@ export function AIInputWithLoadingDemo({
       </div>
       {/* Messages container - using Conversation component - fills remaining space */}
       <Conversation
+        ref={scrollContainerRef}
         className={cn(
           "flex-1 no-scrollbar overflow-y-auto relative",
           !hasMessages && "flex items-center justify-center"
         )}
         style={{ 
-          overscrollBehavior: 'contain'
+          overscrollBehavior: 'none', // Prevent overscroll bounce
+          scrollBehavior: 'smooth'
         }}
       >
         {/* Progressive blur at top to prevent messages from reaching viewport edge */}
@@ -592,7 +657,7 @@ export function AIInputWithLoadingDemo({
             blurAmount="8px"
           />
         )}
-        <ConversationContent className={hasMessages ? "px-4 pt-[420px] pb-0" : "p-4 pt-[420px]"}>
+        <ConversationContent className={hasMessages ? "px-4 pt-[420px] pb-6" : "p-4 pt-[420px]"}>
           <div className={cn(
             "max-w-3xl w-full mx-auto flex flex-col",
             (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
@@ -628,17 +693,17 @@ export function AIInputWithLoadingDemo({
               
               // Show assistant messages with content (intro text)
               if (msg.role === "assistant" && msg.content && (!msg.tracks || msg.tracks.length === 0)) {
-                return (
-                  <motion.div
-                    key={msg.id}
-                    data-message-id={msg.id}
-                    initial={{ opacity: 0, y: 10 }}
+              return (
+                <motion.div
+                  key={msg.id}
+                  data-message-id={msg.id}
+                  initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
+                  transition={{ duration: 0.3 }}
                     className="w-full flex gap-2 py-4 justify-start"
                   >
                     <div className="flex flex-col gap-2 items-start max-w-[85%]">
-                      <div className={cn(
+                <div className={cn(
                         "px-4 py-3 rounded-2xl break-word",
                         "bg-white/5 text-white backdrop-blur-md border border-white/10 text-sm"
                       )}>
@@ -671,20 +736,20 @@ export function AIInputWithLoadingDemo({
                         className="w-full flex gap-2 py-4 justify-start"
                       >
                         <div className="flex flex-col gap-2 items-start max-w-[85%]">
-                          <div className={cn(
-                            "px-4 py-3 rounded-2xl break-word",
+                  <div className={cn(
+                    "px-4 py-3 rounded-2xl break-word",
                             "bg-white/5 text-white backdrop-blur-md border border-white/10 text-sm"
-                          )}>
-                            <TextAnimate 
-                              animation="fadeIn" 
-                              by="line"
-                              startOnView={false}
-                              once={true}
-                              className="text-white"
-                            >
-                              {msg.content}
-                            </TextAnimate>
-                          </div>
+                  )}>
+                    <TextAnimate 
+                      animation="fadeIn" 
+                      by="line"
+                      startOnView={false}
+                      once={true}
+                      className="text-white"
+                    >
+                      {msg.content}
+                    </TextAnimate>
+                  </div>
                         </div>
                       </motion.div>
                     )}
@@ -700,74 +765,74 @@ export function AIInputWithLoadingDemo({
                     >
                       <div className="flex flex-col gap-2 items-start max-w-[85%] w-full">
                         {/* Display tracks - with glass div styling */}
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.4, delay: 0.2 }}
-                          className={cn(
-                            "w-full rounded-2xl p-4",
-                            msg.switched 
-                              ? "bg-transparent" 
-                              : "bg-white/5 backdrop-blur-md border border-white/10"
-                          )}
-                        >
-                          {!msg.switched && (
-                            <div className="flex items-center justify-between mb-3">
-                              <h3 className="text-sm font-semibold text-white">
-                                🎵 Your Playlist ({msg.tracks.length} tracks)
-                              </h3>
-                            </div>
-                          )}
-                          {msg.switched ? (
-                            <AnimatedTrackCarousel tracks={msg.tracks} />
-                          ) : (
-                            <TrackList 
-                              tracks={msg.tracks} 
-                              likedTracks={msg.likedTracks || new Set()}
-                              onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4, delay: 0.2 }}
+                      className={cn(
+                        "w-full rounded-2xl p-4",
+                        msg.switched 
+                          ? "bg-transparent" 
+                          : "bg-white/5 backdrop-blur-md border border-white/10"
+                      )}
+                    >
+                      {!msg.switched && (
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-semibold text-white">
+                            🎵 Your Playlist ({msg.tracks.length} tracks)
+                          </h3>
+                        </div>
+                      )}
+                      {msg.switched ? (
+                        <AnimatedTrackCarousel tracks={msg.tracks} />
+                      ) : (
+                        <TrackList 
+                          tracks={msg.tracks} 
+                          likedTracks={msg.likedTracks || new Set()}
+                          onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
                               frequentlyLikedTerms={frequentlyLikedTerms}
-                            />
-                          )}
-                        </motion.div>
-                        
-                        {/* Action buttons for assistant messages - like, dislike, and switch */}
-                        <Actions className={cn("mt-2", msg.switched && "mt-1")}>
-                          <Action
-                            label="Like"
-                            tooltip="Like this response"
-                            onClick={() => handleLike(msg.id)}
-                            className={msg.liked ? "text-green-500" : ""}
-                          >
-                            <ThumbsUpIcon className="size-4" />
-                          </Action>
-                          <Action
-                            label="Dislike"
-                            tooltip="Dislike this response"
-                            onClick={() => handleDislike(msg.id)}
-                            className={msg.disliked ? "text-red-500" : ""}
-                          >
-                            <ThumbsDownIcon className="size-4" />
-                          </Action>
-                          <Action
-                            label="Switch"
-                            tooltip="Switch"
-                            onClick={() => handleSwitch(msg.id)}
-                            className={msg.switched ? "text-blue-500" : ""}
-                          >
-                            {msg.switched ? (
-                              <ToggleRight className="size-4" />
-                            ) : (
-                              <ToggleLeft className="size-4" />
-                            )}
-                          </Action>
-                        </Actions>
+                        />
+                      )}
+                    </motion.div>
+                  
+                  {/* Action buttons for assistant messages - like, dislike, and switch */}
+                    <Actions className={cn("mt-2", msg.switched && "mt-1")}>
+                      <Action
+                        label="Like"
+                        tooltip="Like this response"
+                        onClick={() => handleLike(msg.id)}
+                        className={msg.liked ? "text-green-500" : ""}
+                      >
+                        <ThumbsUpIcon className="size-4" />
+                      </Action>
+                      <Action
+                        label="Dislike"
+                        tooltip="Dislike this response"
+                        onClick={() => handleDislike(msg.id)}
+                        className={msg.disliked ? "text-red-500" : ""}
+                      >
+                        <ThumbsDownIcon className="size-4" />
+                      </Action>
+                      <Action
+                        label="Switch"
+                        tooltip="Switch"
+                        onClick={() => handleSwitch(msg.id)}
+                        className={msg.switched ? "text-blue-500" : ""}
+                      >
+                        {msg.switched ? (
+                          <ToggleRight className="size-4" />
+                        ) : (
+                          <ToggleLeft className="size-4" />
+                        )}
+                      </Action>
+                    </Actions>
                       </div>
                     </motion.div>
                   </Fragment>
                 );
               }
               
-              // Show user messages in chat
+              // Show user messages in chat (aligned to top right like ChatGPT)
               if (msg.role === "user") {
                 return (
                   <motion.div
@@ -781,7 +846,7 @@ export function AIInputWithLoadingDemo({
                     }}
                     transition={{ duration: 0.3 }}
                     className={cn(
-                      "w-full flex gap-2 py-4 justify-end",
+                      "w-full flex gap-2 py-4 justify-end items-start",
                       isProcessingLastUserMessage && "z-10 relative"
                     )}
                   >
@@ -800,9 +865,9 @@ export function AIInputWithLoadingDemo({
                           {msg.content}
                         </TextAnimate>
                       </div>
-                    </div>
-                  </motion.div>
-                );
+                </div>
+              </motion.div>
+              );
               }
               
               return null;
@@ -825,23 +890,27 @@ export function AIInputWithLoadingDemo({
       </Conversation>
       
       {/* Input - at bottom of flex container, centered when no messages */}
+      {/* Messages are clipped below this input area */}
       <div className={cn(
-        "w-full shrink-0 relative z-10",
+        "w-full shrink-0 relative z-30",
         !hasMessages && "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
       )}>
         <div
           className={cn(
-            "w-full mx-auto",
+            "w-full mx-auto relative z-20",
             hasMessages 
-              ? "max-w-4xl px-4 pt-6 pb-4" 
+              ? "max-w-4xl px-4 py-6" 
               : "max-w-4xl px-4 pt-6 pb-4 pointer-events-auto"
           )}
         >
-          <AIInputWithLoading 
+          <ChatGPTPromptInput 
             onSubmit={simulateResponse}
             loadingDuration={3000}
+            submitted={isSubmitting}
             spotifyConnected={spotifyConnected}
             onSpotifyClick={handleSpotifyConnect}
+            minHeight={56}
+            maxHeight={200}
           />
         </div>
       </div>

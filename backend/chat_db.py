@@ -483,6 +483,131 @@ class ChatDatabase:
             import traceback
             traceback.print_exc()
             return set()
+    
+    def get_previously_recommended_tracks(self, user_id, user_message, similarity_threshold=0.7):
+        """
+        Get track IDs that were previously recommended for similar prompts
+        
+        Args:
+            user_id: Clerk user ID
+            user_message: Current user message to compare against
+            similarity_threshold: Minimum similarity score (0.0-1.0) to consider prompts similar (default: 0.7)
+        
+        Returns:
+            Set of track IDs that were previously recommended for similar prompts
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Get all assistant messages with tracks and their preceding user messages
+                    # Match each assistant message with the most recent user message before it
+                    cur.execute('''
+                        SELECT 
+                            u.content as user_msg_content,
+                            a.tracks as assistant_tracks
+                        FROM chat_messages a
+                        LEFT JOIN LATERAL (
+                            SELECT content
+                            FROM chat_messages
+                            WHERE clerk_id = %s
+                            AND role = 'user'
+                            AND created_at < a.created_at
+                            AND content IS NOT NULL
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                        ) u ON true
+                        WHERE a.clerk_id = %s
+                        AND a.role = 'assistant'
+                        AND a.tracks IS NOT NULL
+                        AND jsonb_array_length(a.tracks) > 0
+                        ORDER BY a.created_at DESC
+                        LIMIT 50
+                    ''', (user_id, user_id))
+                    
+                    rows = cur.fetchall()
+                    
+                    if not rows:
+                        return set()
+                    
+                    # Simple similarity check: calculate word overlap between messages
+                    def calculate_similarity(msg1, msg2):
+                        """Calculate simple word-based similarity (0.0-1.0)"""
+                        if not msg1 or not msg2:
+                            return 0.0
+                        
+                        # Normalize messages
+                        words1 = set(msg1.lower().split())
+                        words2 = set(msg2.lower().split())
+                        
+                        # Remove common stop words
+                        stop_words = {'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 
+                                     'you', 'your', 'yours', 'yourself', 'yourselves', 'he', 'him', 
+                                     'his', 'himself', 'she', 'her', 'hers', 'herself', 'it', 'its', 
+                                     'itself', 'they', 'them', 'their', 'theirs', 'themselves', 'what', 
+                                     'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 
+                                     'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 
+                                     'had', 'having', 'do', 'does', 'did', 'doing', 'a', 'an', 'the', 
+                                     'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 
+                                     'at', 'by', 'for', 'with', 'through', 'during', 'before', 'after', 
+                                     'above', 'below', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 
+                                     'under', 'again', 'further', 'then', 'once', 'want', 'songs', 'music', 
+                                     'playlist', 'recommend', 'give', 'me', 'some'}
+                        
+                        words1 = words1 - stop_words
+                        words2 = words2 - stop_words
+                        
+                        if not words1 or not words2:
+                            return 0.0
+                        
+                        # Calculate Jaccard similarity (intersection over union)
+                        intersection = len(words1 & words2)
+                        union = len(words1 | words2)
+                        
+                        if union == 0:
+                            return 0.0
+                        
+                        return intersection / union
+                    
+                    # Normalize current message
+                    current_msg_normalized = user_message.lower().strip()
+                    
+                    # Collect track IDs from similar prompts
+                    previously_recommended_tracks = set()
+                    similar_prompts_found = 0
+                    
+                    for row in rows:
+                        user_msg_content, assistant_tracks = row
+                        
+                        # Skip if no tracks in assistant message or no user message
+                        if not assistant_tracks or not user_msg_content:
+                            continue
+                        
+                        # Calculate similarity
+                        similarity = calculate_similarity(current_msg_normalized, user_msg_content.lower().strip())
+                        
+                        if similarity >= similarity_threshold:
+                            similar_prompts_found += 1
+                            print(f"📋 Found similar prompt (similarity: {similarity:.2f}): '{user_msg_content[:50]}...'")
+                            
+                            # Extract track IDs from assistant message tracks
+                            if isinstance(assistant_tracks, list):
+                                for track in assistant_tracks:
+                                    if isinstance(track, dict) and track.get('id'):
+                                        previously_recommended_tracks.add(track['id'])
+                    
+                    if similar_prompts_found > 0:
+                        print(f"✅ Found {similar_prompts_found} similar prompt(s) with {len(previously_recommended_tracks)} previously recommended tracks")
+                        print(f"   Excluding these tracks from new recommendations: {list(previously_recommended_tracks)[:10]}")
+                    else:
+                        print(f"ℹ️  No similar prompts found (similarity threshold: {similarity_threshold})")
+                    
+                    return previously_recommended_tracks
+                    
+        except Exception as e:
+            print(f"❌ Error getting previously recommended tracks: {e}")
+            import traceback
+            traceback.print_exc()
+            return set()
 
 
 # Create global chat database handler
