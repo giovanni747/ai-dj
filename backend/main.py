@@ -123,16 +123,101 @@ def is_authenticated():
     except:
         return False
 
+def translate_lyrics(lyrics: str) -> tuple[str, str | None]:
+    """
+    Translate lyrics to English if they're in a different language.
+    
+    Args:
+        lyrics: Original lyrics text
+    
+    Returns:
+        Tuple of (translated_lyrics, detected_language) or (original_lyrics, None) if already English or error
+    """
+    if not lyrics:
+        return lyrics, None
+    
+    try:
+        # Use Groq API for translation (since we're already using it)
+        from groq import Groq
+        groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        
+        # First, detect language using a small sample
+        sample = lyrics[:500]  # Use first 500 chars for detection
+        
+        detect_prompt = f"""Detect the language of this text. Return ONLY the ISO 639-1 language code (e.g., "es", "fr", "en", "de", "pt", "it").
+If the text is in English, return "en". If you're unsure, return "en".
+
+Text: {sample}
+
+Language code:"""
+        
+        detection_response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",  # Fast model for detection
+            messages=[{"role": "user", "content": detect_prompt}],
+            temperature=0.1,
+            max_tokens=10
+        )
+        
+        detected_lang = detection_response.choices[0].message.content.strip().lower()
+        # Clean up response (remove quotes, periods, etc.)
+        detected_lang = detected_lang.strip('"\'.,;:').lower()
+        
+        # If already English, return original
+        if detected_lang in ["en", "english"]:
+            print(f"    ℹ️  Lyrics already in English")
+            return lyrics, "en"
+        
+        print(f"    🌐 Detected language: {detected_lang}, translating to English...")
+        
+        # Translate to English using current Groq model
+        translate_prompt = f"""Translate the following song lyrics to English. 
+Preserve the line breaks and structure. Do not add any explanations or commentary, only return the translated lyrics.
+
+Original lyrics ({detected_lang}):
+{lyrics}
+
+English translation:"""
+        
+        try:
+            translation_response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",  # Updated to current model
+                messages=[{"role": "user", "content": translate_prompt}],
+                temperature=0.3,
+                max_tokens=2000
+            )
+            
+            translated = translation_response.choices[0].message.content.strip()
+            
+            # Clean up translation (remove any extra text the model might add)
+            if translated.startswith("English translation:"):
+                translated = translated.split("English translation:", 1)[1].strip()
+            if translated.startswith("Translation:"):
+                translated = translated.split("Translation:", 1)[1].strip()
+            
+            print(f"    ✅ Translated lyrics ({len(translated)} chars)")
+            return translated, detected_lang
+            
+        except Exception as translation_error:
+            # If translation fails, return original lyrics BUT preserve the detected language
+            print(f"    ⚠️  Translation error: {translation_error}, keeping original lyrics")
+            print(f"    ℹ️  Preserving detected language: {detected_lang}")
+            return lyrics, detected_lang  # Return detected language, not None!
+        
+    except Exception as e:
+        print(f"    ⚠️  Language detection or translation error: {e}, using original lyrics")
+        # If we can't even detect language, return None (will default to 'en' later)
+        return lyrics, None
+
 def get_lyrics(track_name, artist_name):
     """
-    Fetch lyrics from Genius API
+    Fetch lyrics from Genius API and translate to English if needed.
     
     Args:
         track_name: Name of the track
         artist_name: Name of the artist (can be comma-separated)
     
     Returns:
-        Lyrics string or None if not found
+        Dict with keys: 'original', 'translated', 'language', or None if not found
     """
     if not genius:
         return None
@@ -155,7 +240,31 @@ def get_lyrics(track_name, artist_name):
             lyrics = lyrics.strip()
             
             print(f"    ✅ Found lyrics ({len(lyrics)} chars)")
-            return lyrics
+            
+            # Translate if needed
+            translated_lyrics, detected_lang = translate_lyrics(lyrics)
+            
+            # If detected_lang is None (error during detection), default to 'en'
+            # But if detected_lang is set, use it even if translation failed
+            final_language = detected_lang if detected_lang else 'en'
+            
+            # Check if translation actually happened (original ≠ translated)
+            was_translated = translated_lyrics != lyrics
+            
+            if was_translated:
+                print(f"    ✅ Translation successful: {final_language} → en")
+            elif detected_lang and detected_lang != 'en':
+                print(f"    ⚠️  Translation failed, but detected language is: {final_language}")
+            else:
+                print(f"    ℹ️  Lyrics are in English or could not detect language")
+            
+            result = {
+                'original': lyrics,
+                'translated': translated_lyrics,
+                'language': final_language
+            }
+            
+            return result
         else:
             print(f"    ⚠️  No lyrics found")
             return None
@@ -1213,24 +1322,63 @@ def dj_recommend():
         
         # First, fetch all lyrics
         tracks_with_lyrics = []
+        non_english_tracks = []
+        
         for i, track in enumerate(tracks, 1):
             print(f"\n[{i}/{len(tracks)}] Fetching lyrics: {track['name']} by {track['artist']}")
             
             try:
-                lyrics = get_lyrics(track['name'], track['artist'])
+                lyrics_data = get_lyrics(track['name'], track['artist'])
                 
-                if lyrics:
-                    print(f"  ✅ Lyrics found ({len(lyrics)} chars)")
-                    track['lyrics'] = lyrics
+                if lyrics_data:
+                    print(f"  ✅ Lyrics found (original: {len(lyrics_data['original'])} chars, language: {lyrics_data['language']})")
+                    # Store translated lyrics for AI analysis
+                    track['lyrics'] = lyrics_data['translated']
+                    # Store original lyrics for display
+                    track['lyrics_original'] = lyrics_data['original']
+                    # Store detected language
+                    track['lyrics_language'] = lyrics_data['language']
+                    
+                    # Check if lyrics were actually translated
+                    lyrics_changed = lyrics_data['original'] != lyrics_data['translated']
+                    is_non_english = lyrics_data['language'] != 'en'
+                    
+                    print(f"  🌐 Language: {lyrics_data['language']} | Non-English: {is_non_english} | Translated: {lyrics_changed}")
+                    
+                    if is_non_english or lyrics_changed:
+                        non_english_tracks.append({
+                            'name': track['name'],
+                            'artist': track['artist'],
+                            'language': lyrics_data['language'],
+                            'was_translated': lyrics_changed
+                        })
+                        print(f"  ⭐ NON-ENGLISH TRACK DETECTED - Will show EN button")
+                    else:
+                        print(f"  ✓ English track - No translation needed")
+                    
                     tracks_with_lyrics.append(track)
                 else:
                     print(f"  ⚠️ No lyrics available, using default score")
                     track['lyrics'] = None
+                    track['lyrics_original'] = None
+                    track['lyrics_language'] = None
                     track['lyrics_score'] = 5  # Default score for no lyrics
             except Exception as e:
                 print(f"  ❌ Error fetching lyrics: {e}")
                 track['lyrics'] = None
+                track['lyrics_original'] = None
+                track['lyrics_language'] = None
                 track['lyrics_score'] = 5  # Default score on error
+        
+        # Print summary of non-English tracks
+        if non_english_tracks:
+            print(f"\n{'='*60}")
+            print(f"🌍 NON-ENGLISH TRACKS SUMMARY ({len(non_english_tracks)} found)")
+            print(f"{'='*60}")
+            for t in non_english_tracks:
+                print(f"  🎵 {t['name']} by {t['artist']}")
+                print(f"     Language: {t['language']} | Translated: {t['was_translated']}")
+            print(f"{'='*60}\n")
         
         # Batch score all tracks with lyrics in a single API call
         if tracks_with_lyrics:

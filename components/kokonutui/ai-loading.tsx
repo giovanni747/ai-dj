@@ -10,7 +10,7 @@
  * @github: https://github.com/kokonut-labs/kokonutui
  */
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 
 const TASK_SEQUENCES = [
     {
@@ -163,17 +163,34 @@ export default function AILoadingState() {
     const currentSequence = TASK_SEQUENCES[sequenceIndex];
     const totalLines = currentSequence.lines.length;
 
-    useEffect(() => {
-        const initialLines = [];
+    const initialLines = useMemo(() => {
+        const lines = [];
         for (let i = 0; i < Math.min(5, totalLines); i++) {
-            initialLines.push({
+            lines.push({
                 text: currentSequence.lines[i],
                 number: i + 1,
             });
         }
-        setVisibleLines(initialLines);
-        setScrollPosition(0);
-    }, [sequenceIndex, currentSequence.lines, totalLines]);
+        return lines;
+    }, [currentSequence.lines, totalLines]);
+
+    const prevSequenceIndexRef = useRef(sequenceIndex);
+    const isInitialMountRef = useRef(true);
+
+    useEffect(() => {
+        // Initialize on mount or reset when sequence changes
+        const shouldReset = isInitialMountRef.current || prevSequenceIndexRef.current !== sequenceIndex;
+        
+        if (shouldReset) {
+            isInitialMountRef.current = false;
+            prevSequenceIndexRef.current = sequenceIndex;
+            // Defer state updates to avoid synchronous setState in effect
+            requestAnimationFrame(() => {
+                setVisibleLines(initialLines);
+                setScrollPosition(0);
+            });
+        }
+    }, [sequenceIndex, initialLines]);
 
     // Handle line advancement
     useEffect(() => {
@@ -244,7 +261,7 @@ export default function AILoadingState() {
                         style={{ scrollBehavior: "smooth" }}
                     >
                         <div>
-                            {visibleLines.map((line, index) => (
+                            {visibleLines.map((line) => (
                                 <div
                                     key={`${line.number}-${line.text}`}
                                     className="flex h-[28px] items-center px-2"

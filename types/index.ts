@@ -26,7 +26,9 @@ export interface SpotifyTrack {
   duration_ms: number;
   popularity: number;
   audio_features?: AudioFeatures | null; // Audio features from Spotify API
-  lyrics?: string | null; // Full lyrics from Genius API
+  lyrics?: string | null; // Translated lyrics (English) for AI analysis
+  lyrics_original?: string | null; // Original lyrics in original language
+  lyrics_language?: string | null; // Detected language code (e.g., "es", "fr", "en")
   lyrics_explanation?: string | null; // LLM explanation of why lyrics match the prompt
   highlighted_terms?: string[]; // Terms from lyrics that relate to the prompt/preferences
 }

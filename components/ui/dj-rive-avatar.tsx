@@ -14,6 +14,7 @@ interface DjRiveAvatarProps {
   alignment?: Alignment;
   src?: string; // allow override; defaults to /dj_avatar.riv
   isTracking?: boolean; // Optional external control, otherwise tracks cursor
+  isTyping?: boolean;
 }
 
 export function DjRiveAvatar({
@@ -26,12 +27,20 @@ export function DjRiveAvatar({
   alignment = Alignment.Center,
   src = "/dj_avatar.riv",
   isTracking: externalIsTracking,
+  isTyping: _isTyping, // Reserved for future use
 }: DjRiveAvatarProps) {
+  // Suppress unused parameter warning - reserved for future typing animation
+  void _isTyping;
   const [isTracking, setIsTracking] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastMoveTimeRef = useRef<number>(Date.now());
+  const lastMoveTimeRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Initialize lastMoveTimeRef on mount
+  useEffect(() => {
+    lastMoveTimeRef.current = Date.now();
+  }, []);
+
   // Calculate container size (50% of avatar size if not specified - smaller background)
   const actualContainerSize = containerSize ?? Math.round(size * 0.5);
 
@@ -51,75 +60,73 @@ export function DjRiveAvatar({
   const hitBoxInput = useStateMachineInput(rive, stateMachine, "hitBox");
   const hitBoxRInput = useStateMachineInput(rive, stateMachine, "hitBoxR");
   const hitBoxLInput = useStateMachineInput(rive, stateMachine, "hitBoxL");
+  const xAxisInput = useStateMachineInput(rive, stateMachine, "xAxis");
+  const yAxisInput = useStateMachineInput(rive, stateMachine, "yAxis");
 
   // Track cursor movement and position with larger tracking area
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       const now = Date.now();
       lastMoveTimeRef.current = now;
-      
+
       // Set tracking to true immediately
       setIsTracking(true);
-      
+
       // Calculate cursor position relative to avatar center
       // Use a larger tracking area (viewport-based) for more natural movement
       if (containerRef.current && rive) {
         const rect = containerRef.current.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
-        
+
         // Use a larger tracking radius (3x the avatar size) for smoother, more natural tracking
         const trackingRadius = size * 3;
-        
+
         // Calculate relative position with larger tracking area
         const deltaX = e.clientX - centerX;
         const deltaY = e.clientY - centerY;
-        
+
         // Normalize to -1 to 1 range based on tracking radius
         const relativeX = deltaX / trackingRadius;
         const relativeY = deltaY / trackingRadius;
-        
+
         // Clamp values to -1 to 1 range
         const clampedX = Math.max(-1, Math.min(1, relativeX));
         const clampedY = Math.max(-1, Math.min(1, relativeY));
-        
-        // Update number inputs for head/eye tracking
-        // Try different mappings - hitBox inputs might control:
-        // Option 1: hitBox = X, hitBoxR = X (right eye), hitBoxL = X (left eye) - all horizontal
-        // Option 2: hitBox = X, hitBoxR = Y, hitBoxL = X - mixed
-        // Option 3: All use X for horizontal, or all use different combinations
-        // Let's try: hitBox = X (head), hitBoxR = X (right eye), hitBoxL = X (left eye) for horizontal
-        // And also try using Y for vertical movement if needed
-        if (hitBoxInput) {
-          // Main head tracking - use X for horizontal
-          hitBoxInput.value = clampedX;
-        }
-        if (hitBoxRInput) {
-          // Right eye tracking - try X for horizontal eye movement
-          hitBoxRInput.value = clampedX;
-        }
-        if (hitBoxLInput) {
-          // Left eye tracking - try X for horizontal eye movement (or Y for vertical)
-          // Try X first for horizontal tracking
-          hitBoxLInput.value = clampedX;
-        }
+
+        // Map -1...1 to 0...100 for standard Rive tracking
+        const mapToRange = (val: number) => (val + 1) * 50;
+        const targetX = mapToRange(clampedX);
+        const targetY = mapToRange(clampedY); // Invert Y if needed, but usually 0 is top, 100 is bottom
+
+        if (xAxisInput) xAxisInput.value = targetX;
+        if (yAxisInput) yAxisInput.value = targetY;
+
+        // Keep existing inputs but maybe they expect -100 to 100 or similar?
+        // If the user said "it isnt tracking", likely the above inputs were missing.
+        // We'll leave these as is for now but ensure they get values.
+        if (hitBoxInput) hitBoxInput.value = clampedX * 100; // Try larger range?
+        if (hitBoxRInput) hitBoxRInput.value = clampedX * 100;
+        if (hitBoxLInput) hitBoxLInput.value = clampedX * 100;
       }
-      
+
       // Clear existing timeout
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
-      
+
       // Set tracking to false after 800ms of no movement
       timeoutRef.current = setTimeout(() => {
         const timeSinceLastMove = Date.now() - lastMoveTimeRef.current;
         if (timeSinceLastMove >= 800) {
           setIsTracking(false);
-          
+
           // Reset hitBox values to center when not tracking
           if (hitBoxInput) hitBoxInput.value = 0;
           if (hitBoxRInput) hitBoxRInput.value = 0;
           if (hitBoxLInput) hitBoxLInput.value = 0;
+          if (xAxisInput) xAxisInput.value = 50; // Center
+          if (yAxisInput) yAxisInput.value = 50; // Center
         }
       }, 800);
     };
@@ -133,16 +140,22 @@ export function DjRiveAvatar({
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [rive, hitBoxInput, hitBoxRInput, hitBoxLInput, size]);
+  }, [rive, hitBoxInput, hitBoxRInput, hitBoxLInput, xAxisInput, yAxisInput, size]);
 
   // Update the IsTracking input - use external prop if provided, otherwise use cursor tracking
   const trackingValue = externalIsTracking !== undefined ? externalIsTracking : isTracking;
-  
+
   useEffect(() => {
-    if (isTrackingInput) {
-      isTrackingInput.value = trackingValue;
+    if (isTrackingInput && rive) {
+      try {
+        // Rive state machine inputs are mutable by design
+        // eslint-disable-next-line react-hooks/immutability
+        isTrackingInput.value = trackingValue;
+      } catch {
+        // Ignore errors if runtime is not ready or disposed
+      }
     }
-  }, [isTrackingInput, trackingValue]);
+  }, [isTrackingInput, trackingValue, rive]);
 
   return (
     <div

@@ -22,13 +22,13 @@ const TooltipContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        "relative z-50 max-w-[280px] rounded-md bg-popover text-popover-foreground px-1.5 py-1 text-xs animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        "relative z-50 max-w-[280px] rounded-lg border border-white/10 bg-black/80 backdrop-blur-xl text-white/90 px-1.5 py-1 text-xs shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         className
       )}
       {...props}
     >
       {props.children}
-      {showArrow && <TooltipPrimitive.Arrow className="-my-px fill-popover" />}
+      {showArrow && <TooltipPrimitive.Arrow className="-my-px fill-black/80" />}
     </TooltipPrimitive.Content>
   </TooltipPrimitive.Portal>
 ));
@@ -75,8 +75,8 @@ interface ChatGPTPromptInputProps extends Omit<React.TextareaHTMLAttributes<HTML
 }
 
 export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTPromptInputProps>(
-  ({ 
-    className, 
+  ({
+    className,
     onSubmit,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     loadingDuration: _loadingDuration,
@@ -85,7 +85,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     onSpotifyClick,
     minHeight = 56,
     maxHeight = 200,
-    ...props 
+    ...props
   }, ref) => {
     const internalTextareaRef = React.useRef<HTMLTextAreaElement>(null);
     const [value, setValue] = React.useState("");
@@ -150,7 +150,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
             className={cn(
               "w-full resize-none border-0 bg-transparent p-3 text-white",
               "placeholder:text-white/50 focus:ring-0 focus-visible:outline-none",
-              "min-h-12 custom-scrollbar"
+              "min-h-12 no-scrollbar"
             )}
             {...props}
           />
@@ -319,8 +319,8 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                         submitted
                           ? "bg-white/10 border border-white/20 backdrop-blur-md"
                           : hasValue
-                          ? "bg-white/10 border border-white/20 backdrop-blur-md hover:bg-white/20"
-                          : "bg-white/5 border border-white/10 opacity-30 cursor-not-allowed"
+                            ? "bg-white/10 border border-white/20 backdrop-blur-md hover:bg-white/20"
+                            : "bg-white/5 border border-white/10 opacity-30 cursor-not-allowed"
                       )}
                     >
                       {submitted ? (

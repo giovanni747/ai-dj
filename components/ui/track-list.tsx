@@ -5,8 +5,9 @@ import { useState, useRef, useEffect } from "react";
 import type { SpotifyTrack } from "@/types";
 import { formatDuration, getAlbumArt } from "@/lib/track-utils";
 import { cn } from "@/lib/utils";
-import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText } from "lucide-react";
+import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText, BookmarkIcon } from "lucide-react";
 import { highlightLyricsTerms } from "@/lib/lyrics-highlight";
+import { Button } from "@/components/ui/button";
 
 interface TrackListProps {
   tracks: SpotifyTrack[];
@@ -20,6 +21,7 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [expandedTracks, setExpandedTracks] = useState<Set<string>>(new Set());
+  const [showTranslatedLyrics, setShowTranslatedLyrics] = useState<Map<string, boolean>>(new Map());
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Stop audio when component unmounts or track changes
@@ -31,6 +33,70 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
       }
     };
   }, []);
+
+  // Debug: Log summary of tracks with EN button and non-English detection
+  useEffect(() => {
+    if (tracks && tracks.length > 0) {
+      console.log('\n🌍 ===== LANGUAGE & EN BUTTON DETECTION =====');
+      console.log(`Total tracks: ${tracks.length}`);
+      
+      const tracksWithLyrics = tracks.filter(t => t.lyrics);
+      const englishTracks = tracks.filter(t => t.lyrics_language === 'en');
+      const nonEnglishTracks = tracks.filter(t => t.lyrics_language && t.lyrics_language !== 'en');
+      const translatedTracks = tracks.filter(t => t.lyrics_original && t.lyrics && t.lyrics_original !== t.lyrics);
+      
+      console.log(`Tracks with lyrics: ${tracksWithLyrics.length}`);
+      console.log(`English tracks: ${englishTracks.length}`);
+      console.log(`Non-English tracks (detected language): ${nonEnglishTracks.length}`);
+      console.log(`Tracks with translation (original ≠ translated): ${translatedTracks.length}`);
+      
+      // Find tracks that should have EN button
+      const tracksWithENButton = tracks.filter(track => {
+        if (!track.lyrics) return false;
+        const hasOriginal = !!track.lyrics_original;
+        const hasTranslated = !!track.lyrics;
+        const lyricsDiffer = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
+        return hasOriginal && hasTranslated && lyricsDiffer;
+      });
+
+      console.log(`\n✅ Tracks WITH EN Button: ${tracksWithENButton.length}`);
+      
+      if (tracksWithENButton.length > 0) {
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        tracksWithENButton.forEach((track, idx) => {
+          console.log(`${idx + 1}. 🎵 "${track.name}" by ${track.artist}`);
+          console.log(`   🌐 Language: ${track.lyrics_language || 'unknown'}`);
+          console.log(`   📝 Original length: ${track.lyrics_original?.length || 0} chars`);
+          console.log(`   📄 Translated length: ${track.lyrics?.length || 0} chars`);
+          console.log(`   ✓ Lyrics differ: ${track.lyrics_original !== track.lyrics}`);
+        });
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      } else {
+        console.log('⚠️  No tracks with EN button found!');
+      }
+      
+      const tracksWithLyricsButNoButton = tracks.filter(track => {
+        if (!track.lyrics) return false;
+        const hasOriginal = !!track.lyrics_original;
+        const hasTranslated = !!track.lyrics;
+        const lyricsDiffer = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
+        return !(hasOriginal && hasTranslated && lyricsDiffer);
+      });
+      
+      if (tracksWithLyricsButNoButton.length > 0) {
+        console.log(`\n❌ Tracks with lyrics but NO EN Button: ${tracksWithLyricsButNoButton.length}`);
+        tracksWithLyricsButNoButton.forEach((track, idx) => {
+          const reason = !track.lyrics_original ? 'No original lyrics stored' 
+                       : !track.lyrics ? 'No translated lyrics'
+                       : track.lyrics_original === track.lyrics ? 'Original = Translated (English song)'
+                       : 'Unknown';
+          console.log(`${idx + 1}. "${track.name}" - Language: ${track.lyrics_language || 'unknown'} | Reason: ${reason}`);
+        });
+      }
+      
+      console.log('============================================\n');
+    }
+  }, [tracks]);
 
   const handlePlayPause = (track: SpotifyTrack) => {
     if (!track.preview_url) {
@@ -92,7 +158,6 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
     <div className={`space-y-2 ${className}`}>
       {tracks.map((track, index) => {
         const isCurrentTrack = playingTrackId === track.id;
-        const showPlayButton = track.preview_url && (isCurrentTrack || !isPlaying);
 
         return (
           <motion.div
@@ -111,6 +176,7 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
             {/* Album Art with Play Button */}
             <div className={`relative shrink-0 w-12 h-12 rounded overflow-hidden bg-white/5 ${!track.preview_url ? 'opacity-60' : ''}`}>
               {track.album.images && track.album.images.length > 0 ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={getAlbumArt(track.album.images, "small") || ""}
                   alt={track.album.name}
@@ -236,37 +302,159 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
               {/* Lyrics */}
               {track.lyrics && (
                 <div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const newExpanded = new Set(expandedTracks);
-                      const lyricsKey = `${track.id}-lyrics`;
-                      if (newExpanded.has(lyricsKey)) {
-                        newExpanded.delete(lyricsKey);
-                      } else {
-                        newExpanded.add(lyricsKey);
-                      }
-                      setExpandedTracks(newExpanded);
-                    }}
-                    className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1 transition-colors"
-                  >
-                    <FileText className="w-3 h-3" />
-                    {expandedTracks.has(`${track.id}-lyrics`) ? (
-                      <>
-                        <ChevronUp className="w-3 h-3" />
-                        <span>Hide lyrics</span>
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown className="w-3 h-3" />
-                        <span>Show lyrics</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newExpanded = new Set(expandedTracks);
+                        const lyricsKey = `${track.id}-lyrics`;
+                        if (newExpanded.has(lyricsKey)) {
+                          newExpanded.delete(lyricsKey);
+                        } else {
+                          newExpanded.add(lyricsKey);
+                        }
+                        setExpandedTracks(newExpanded);
+                      }}
+                      className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1 transition-colors"
+                    >
+                      <FileText className="w-3 h-3" />
+                      {expandedTracks.has(`${track.id}-lyrics`) ? (
+                        <>
+                          <ChevronUp className="w-3 h-3" />
+                          <span>Hide lyrics</span>
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="w-3 h-3" />
+                          <span>Show lyrics</span>
+                        </>
+                      )}
+                    </button>
+                    {/* Right side buttons */}
+                    <div className="flex items-center gap-2">
+                    {/* Language toggle button - only show if lyrics are in a different language */}
+                      {/* Show button if we have original lyrics (meaning translation happened) */}
+                      {(() => {
+                        const hasOriginal = !!track.lyrics_original;
+                        const hasTranslated = !!track.lyrics;
+                        const lyricsDiffer = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
+                        // Show EN button if:
+                        // 1. Translation happened (original ≠ translated), OR
+                        // 2. Language is detected as non-English (even if translation failed)
+                        const isNonEnglish = track.lyrics_language && track.lyrics_language !== 'en';
+                        const shouldShowENButton = (hasOriginal && hasTranslated && lyricsDiffer) || (isNonEnglish && hasOriginal && hasTranslated);
+                        
+                        // Debug logging for EN button
+                        if (track.lyrics) {
+                          if (shouldShowENButton) {
+                            console.log(`🔘 [EN BUTTON ✓] "${track.name}" by ${track.artist}:`, {
+                              lyrics_language: track.lyrics_language,
+                              isNonEnglish,
+                              hasTranslation: lyricsDiffer,
+                              has_lyrics_original: hasOriginal,
+                              has_lyrics_translated: hasTranslated,
+                            });
+                          } else {
+                            console.log(`⚪ [NO EN BUTTON] "${track.name}" by ${track.artist}:`, {
+                              lyrics_language: track.lyrics_language,
+                              isNonEnglish,
+                              hasTranslation: lyricsDiffer,
+                              has_lyrics_original: hasOriginal,
+                              has_lyrics_translated: hasTranslated,
+                              reason: !hasOriginal ? 'No original lyrics' 
+                                     : !hasTranslated ? 'No translated lyrics' 
+                                     : !isNonEnglish && !lyricsDiffer ? 'English song and no translation' 
+                                     : 'Unknown'
+                            });
+                          }
+                        }
+                        
+                        if (shouldShowENButton) {
+                          // Determine if translation actually exists
+                          const hasTranslation = lyricsDiffer;
+                          const currentShowingTranslated = showTranslatedLyrics.get(track.id) ?? true;
+                          
+                          // Button title based on state
+                          let buttonTitle = "Toggle language";
+                          if (hasTranslation) {
+                            buttonTitle = currentShowingTranslated 
+                              ? "Show original lyrics" 
+                              : "Show English translation";
+                          } else {
+                            // Translation failed but language is non-English
+                            buttonTitle = `Language: ${track.lyrics_language?.toUpperCase() || 'Unknown'} (Translation unavailable)`;
+                          }
+                          
+                          return (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-7 w-7 text-xs border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Only toggle if translation exists
+                                if (hasTranslation) {
+                                  const newMap = new Map(showTranslatedLyrics);
+                                  const currentValue = newMap.get(track.id) ?? true;
+                                  newMap.set(track.id, !currentValue);
+                                  setShowTranslatedLyrics(newMap);
+                                }
+                              }}
+                              disabled={!hasTranslation}
+                              title={buttonTitle}
+                            >
+                              <span className="text-[10px] font-medium">EN</span>
+                              <span className="sr-only">Toggle language</span>
+                            </Button>
+                          );
+                        }
+                        return null;
+                      })()}
+                      {/* Bookmark button - only show for non-English lyrics */}
+                      {(() => {
+                        // Show if language is explicitly not English
+                        const isNonEnglish = track.lyrics_language && track.lyrics_language !== 'en';
+                        // Or if translation happened (original differs from translated)
+                        const wasTranslated = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
+                        
+                        // Debug log
+                        if (track.lyrics) {
+                          console.log(`[BOOKMARK CHECK] ${track.name}:`, {
+                            lyrics_language: track.lyrics_language,
+                            isNonEnglish,
+                            wasTranslated,
+                            showButton: isNonEnglish || wasTranslated
+                          });
+                        }
+                        
+                        if (isNonEnglish || wasTranslated) {
+                          return (
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-7 w-7 border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Add bookmark functionality here
+                                console.log('Bookmark clicked for track:', track.name, 'Language:', track.lyrics_language);
+                              }}
+                              title="Bookmark"
+                            >
+                              <BookmarkIcon className="w-3.5 h-3.5" />
+                              <span className="sr-only">Bookmark</span>
+                            </Button>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
                   {expandedTracks.has(`${track.id}-lyrics`) && (
                     <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto overflow-x-hidden relative whitespace-pre-wrap">
                       {highlightLyricsTerms(
-                        track.lyrics,
+                        (showTranslatedLyrics.get(track.id) ?? true) && track.lyrics
+                          ? track.lyrics
+                          : (track.lyrics_original || track.lyrics || ''),
                         track.highlighted_terms || [],
                         frequentlyLikedTerms
                       )}

@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import type { SpotifyTrack } from "@/types";
 import { getAlbumArt } from "@/lib/track-utils";
 import { highlightLyricsTerms } from "@/lib/lyrics-highlight";
+import { Button } from "@/components/ui/button";
 
 interface AnimatedTrackCarouselProps {
   tracks: SpotifyTrack[];
@@ -22,6 +23,7 @@ export const AnimatedTrackCarousel = ({
 }: AnimatedTrackCarouselProps) => {
   const [active, setActive] = useState(0);
   const [expandedExplanations, setExpandedExplanations] = useState<Set<number>>(new Set());
+  const [showTranslatedLyrics, setShowTranslatedLyrics] = useState<Map<string, boolean>>(new Map());
 
   const handleNext = () => {
     setActive((prev) => (prev + 1) % tracks.length);
@@ -191,9 +193,30 @@ export const AnimatedTrackCarousel = ({
                 {/* Lyrics */}
                 {activeTrack.lyrics && (
                   <div>
-                    <h4 className="text-sm font-semibold text-purple-400 mb-2">
-                      Lyrics:
-                    </h4>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-semibold text-purple-400">
+                        Lyrics:
+                      </h4>
+                      {/* Show button if we have original lyrics (meaning translation happened) */}
+                      {activeTrack.lyrics_original && activeTrack.lyrics && activeTrack.lyrics_original !== activeTrack.lyrics && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 text-xs border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newMap = new Map(showTranslatedLyrics);
+                            const currentValue = newMap.get(activeTrack.id) ?? true; // Default to showing translated
+                            newMap.set(activeTrack.id, !currentValue);
+                            setShowTranslatedLyrics(newMap);
+                          }}
+                          title={showTranslatedLyrics.get(activeTrack.id) ?? true ? "Show original lyrics" : "Show English translation"}
+                        >
+                          <span className="text-[10px] font-medium">EN</span>
+                          <span className="sr-only">Toggle language</span>
+                        </Button>
+                      )}
+                    </div>
                     <div className="max-h-48 overflow-y-auto overflow-x-hidden relative bg-white/5 rounded-lg p-3">
                       <motion.p 
                         className="text-xs text-white/70 leading-relaxed whitespace-pre-wrap"
@@ -202,7 +225,9 @@ export const AnimatedTrackCarousel = ({
                         transition={{ delay: 0.2 }}
                       >
                         {highlightLyricsTerms(
-                          activeTrack.lyrics,
+                          (showTranslatedLyrics.get(activeTrack.id) ?? true) && activeTrack.lyrics
+                            ? activeTrack.lyrics
+                            : (activeTrack.lyrics_original || activeTrack.lyrics || ''),
                           activeTrack.highlighted_terms || []
                         )}
                       </motion.p>

@@ -1,9 +1,8 @@
 "use client";
 
-import { AIInputWithLoading } from "@/components/ui/ai-input-with-loading";
 import { ChatGPTPromptInput } from "@/components/ui/chatgpt-prompt-input";
-import { useState, useEffect, Fragment, useRef } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect, Fragment, useRef, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import AILoadingState from "@/components/kokonutui/ai-loading";
 import Loader from "@/components/kokonutui/loader";
 import { TextAnimate } from "@/components/ui/text-animate";
@@ -15,7 +14,9 @@ import {
   ThumbsUpIcon,
   ToggleLeft,
   ToggleRight,
+  MessageCircle, X, Volume2, VolumeX
 } from "lucide-react";
+import { useTextToSpeech } from "@/components/hooks/use-text-to-speech";
 import { Action, Actions } from "@/components/ui/actions";
 import {
   Conversation,
@@ -47,32 +48,45 @@ interface AIInputWithLoadingDemoProps {
   onSpotifyReconnect?: () => void;
 }
 
-// Avatar URL - using Unsplash image for LLM
-const ASSISTANT_AVATAR = "https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=100&h=100&fit=crop";
+// Scenarios data
+const scenarios = [
+  { title: "Late Night Drive", description: "City lights and chill beats" },
+  { title: "Workout Mode", description: "High energy pumping tracks" },
+  { title: "Sunset Vibes", description: "Golden hour melodies" },
+  { title: "Focus & Study", description: "Lo-fi beats for concentration" },
+  { title: "Party Mix", description: "Upbeat dance floor fillers" },
+];
 
-export function AIInputWithLoadingDemo({ 
-  spotifyConnected = false,
-  onSpotifyReconnect 
+export function AIInputWithLoadingDemo({
+  spotifyConnected = false
 }: AIInputWithLoadingDemoProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
-  
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Manage bubble visibility
+  const [bubbleVisible, setBubbleVisible] = useState(false);
+  const [lastMessageId, setLastMessageId] = useState<string | null>(null);
+  // Manage bubble visibility and expansion
+  const [isBubbleExpanded, setIsBubbleExpanded] = useState(false);
+
   // Track if history has been loaded to prevent overwriting new messages
   const historyLoadedRef = useRef(false);
   const hasNewMessagesRef = useRef(false);
-  
+
   // Ref for scroll container to prevent scrolling past top
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  
+
   // Load frequently liked terms
   const loadFrequentlyLikedTerms = async () => {
     try {
       const response = await fetch('/api/frequently-liked-terms?min_occurrences=2', {
         credentials: 'include',
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         const termsSet = new Set<string>(data.terms || []);
@@ -98,8 +112,8 @@ export function AIInputWithLoadingDemo({
     }
 
     // Optimistic update
-    setMessages(prev => prev.map(msg => 
-      msg.id === messageId 
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
         ? { ...msg, liked: true, disliked: false }
         : msg
     ));
@@ -121,8 +135,8 @@ export function AIInputWithLoadingDemo({
       if (!response.ok) {
         console.error('Failed to save message feedback');
         // Revert on error
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === messageId
             ? { ...msg, liked: false }
             : msg
         ));
@@ -140,8 +154,8 @@ export function AIInputWithLoadingDemo({
     }
 
     // Optimistic update
-    setMessages(prev => prev.map(msg => 
-      msg.id === messageId 
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
         ? { ...msg, liked: false, disliked: true }
         : msg
     ));
@@ -163,8 +177,8 @@ export function AIInputWithLoadingDemo({
       if (!response.ok) {
         console.error('Failed to save message feedback');
         // Revert on error
-        setMessages(prev => prev.map(msg => 
-          msg.id === messageId 
+        setMessages(prev => prev.map(msg =>
+          msg.id === messageId
             ? { ...msg, disliked: false }
             : msg
         ));
@@ -175,8 +189,8 @@ export function AIInputWithLoadingDemo({
   };
 
   const handleSwitch = (messageId: string) => {
-    setMessages(prev => prev.map(msg => 
-      msg.id === messageId 
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
         ? { ...msg, switched: !msg.switched }
         : msg
     ));
@@ -186,36 +200,36 @@ export function AIInputWithLoadingDemo({
     // Find the track details
     const message = messages.find(msg => msg.id === messageId);
     const track = message?.tracks?.find(t => t.id === trackId);
-    
+
     if (!track) {
       console.error('Track not found');
       return;
     }
-    
+
     const isCurrentlyLiked = message?.likedTracks?.has(trackId) || false;
-    
+
     // Optimistically update UI
     setMessages(prev => prev.map(msg => {
       if (msg.id === messageId) {
         const likedTracks = msg.likedTracks || new Set<string>();
         const newLikedTracks = new Set(likedTracks);
-        
+
         if (newLikedTracks.has(trackId)) {
           newLikedTracks.delete(trackId);
         } else {
           newLikedTracks.add(trackId);
         }
-        
+
         return { ...msg, likedTracks: newLikedTracks };
       }
       return msg;
     }));
-    
+
     // Save to backend
     try {
       const imageUrl = track.album?.images?.[0]?.url || null;
       const highlightedTerms = track.highlighted_terms || [];
-      
+
       const response = await fetch('/api/track-like', {
         method: 'POST',
         headers: {
@@ -230,7 +244,7 @@ export function AIInputWithLoadingDemo({
           highlighted_terms: isCurrentlyLiked ? undefined : highlightedTerms, // Only send when liking
         }),
       });
-      
+
       if (!response.ok) {
         console.error('Failed to save track like');
         // Revert UI on error
@@ -238,13 +252,13 @@ export function AIInputWithLoadingDemo({
           if (msg.id === messageId) {
             const likedTracks = msg.likedTracks || new Set<string>();
             const newLikedTracks = new Set(likedTracks);
-            
+
             if (newLikedTracks.has(trackId)) {
               newLikedTracks.delete(trackId);
             } else {
               newLikedTracks.add(trackId);
             }
-            
+
             return { ...msg, likedTracks: newLikedTracks };
           }
           return msg;
@@ -252,7 +266,7 @@ export function AIInputWithLoadingDemo({
       } else {
         const data = await response.json();
         console.log('Track like saved:', data);
-        
+
         // Refresh frequently liked terms after liking/unliking
         if (data.liked !== undefined) {
           loadFrequentlyLikedTerms();
@@ -268,12 +282,12 @@ export function AIInputWithLoadingDemo({
   useEffect(() => {
     console.log('🔄 Messages state changed:', {
       count: messages.length,
-      messages: messages.map(m => ({ 
-        id: m.id, 
-        role: m.role, 
+      messages: messages.map(m => ({
+        id: m.id,
+        role: m.role,
         hasContent: !!m.content,
         hasTracks: !!m.tracks,
-        trackCount: m.tracks?.length 
+        trackCount: m.tracks?.length
       }))
     });
   }, [messages]);
@@ -291,7 +305,7 @@ export function AIInputWithLoadingDemo({
           abortController.abort();
           return;
         }
-        
+
         if (!isMounted) return;
         setIsLoadingHistory(true);
 
@@ -374,7 +388,7 @@ export function AIInputWithLoadingDemo({
               // CRITICAL: Check refs and current state
               const hasNewMessages = hasNewMessagesRef.current;
               const historyAlreadyLoaded = historyLoadedRef.current;
-              
+
               console.log('📋 History loading - final check before setting:', {
                 prevLength: prev.length,
                 loadedLength: loadedMessages.length,
@@ -382,26 +396,26 @@ export function AIInputWithLoadingDemo({
                 historyAlreadyLoaded,
                 isMounted
               });
-              
+
               // NEVER overwrite if we have new messages (user has interacted)
               if (hasNewMessages) {
                 console.log('⏭️ SKIP: Has new messages - preserving current messages');
                 return prev;
               }
-              
+
               // NEVER overwrite if history was already loaded
               if (historyAlreadyLoaded) {
                 console.log('⏭️ SKIP: History already loaded - preserving current messages');
                 return prev;
               }
-              
+
               // NEVER overwrite if messages already exist (user has added messages)
               if (prev.length > 0) {
                 console.log('⏭️ SKIP: Messages already exist in state:', prev.length, '- preserving them');
                 historyLoadedRef.current = true;
                 return prev;
               }
-              
+
               // ONLY load history if messages array is empty (initial load)
               console.log('📥 LOADING: Initial history load:', loadedMessages.length, 'messages');
               historyLoadedRef.current = true;
@@ -409,8 +423,8 @@ export function AIInputWithLoadingDemo({
             });
           }
         }
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
           console.log('🛑 History load aborted (user interaction detected)');
         } else {
           console.error('Error loading chat history:', error);
@@ -442,72 +456,59 @@ export function AIInputWithLoadingDemo({
     }
   }, [isLoadingHistory]);
 
+  // Find the latest assistant message to display in the speech bubble
+  // Use useMemo to prevent unnecessary recalculations and flashing
+  const latestAssistantMessage = useMemo(() => {
+    if (messages.length === 0) return null;
+    const latest = [...messages].reverse().find(m => m.role === "assistant" && m.content);
+    return latest || null;
+  }, [messages]);
+
+  // Text-to-Speech Hook
+  const { speak, cancel, isMuted, toggleMute, isSpeaking } = useTextToSpeech();
+
+  // Manage bubble visibility effect
+  // Only update when the message ID actually changes to prevent flashing
+  useEffect(() => {
+    const messageId = latestAssistantMessage?.id;
+    const messageContent = latestAssistantMessage?.content?.trim();
+    
+    // If we have a new message (different ID)
+    if (messageId && messageId !== lastMessageId) {
+      setLastMessageId(messageId);
+      setBubbleVisible(true);
+      setIsBubbleExpanded(false); // Reset to dot for new message
+
+      // Speak the message only if we have content
+      if (messageContent) {
+        speak(messageContent);
+      }
+
+      const timer = setTimeout(() => {
+        setBubbleVisible(false);
+      }, 30000);
+
+      return () => clearTimeout(timer);
+    } 
+    // If message was removed (no latest message)
+    else if (!latestAssistantMessage && lastMessageId) {
+      setBubbleVisible(false);
+      setLastMessageId(null);
+      cancel();
+    }
+    // If we have the same message ID, don't do anything (prevent flashing)
+    // The bubble should already be visible from the previous render
+  }, [latestAssistantMessage?.id, lastMessageId, speak, cancel]);
+
   // Compute hasMessages (used in multiple places)
   const hasMessages = messages.length > 0 || isSubmitting;
 
-  // Prevent scrolling past the top (like ChatGPT)
-  // MUST be before any early returns to maintain hook order
-  useEffect(() => {
-    if (!hasMessages) return;
-    
-    // Find the actual scrollable element (StickToBottom creates a wrapper)
-    const findScrollContainer = () => {
-      if (scrollContainerRef.current) {
-        // Try to find the scrollable div inside StickToBottom
-        const scrollable = scrollContainerRef.current.querySelector('[role="log"]') as HTMLElement;
-        return scrollable || scrollContainerRef.current;
-      }
-      return null;
-    };
-
-    const scrollContainer = findScrollContainer();
-    if (!scrollContainer) return;
-
-    let lastScrollTop = scrollContainer.scrollTop;
-
-    const handleScroll = (e: Event) => {
-      const target = e.target as HTMLElement;
-      if (!target) return;
-
-      const currentScrollTop = target.scrollTop;
-      
-      // If scrolling up and at the top, prevent further scrolling
-      if (currentScrollTop <= 0 && lastScrollTop <= 0) {
-        // Prevent overscroll at top
-        if (target.scrollTop < 0) {
-          target.scrollTop = 0;
-        }
-      }
-      
-      lastScrollTop = currentScrollTop;
-    };
-
-    // Handle wheel events to prevent overscroll
-    const handleWheel = (e: WheelEvent) => {
-      const target = scrollContainer;
-      if (!target) return;
-
-      // If at top and scrolling up, prevent default
-      if (target.scrollTop <= 0 && e.deltaY < 0) {
-        e.preventDefault();
-        target.scrollTop = 0;
-      }
-    };
-
-    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
-    scrollContainer.addEventListener('wheel', handleWheel, { passive: false });
-
-    return () => {
-      scrollContainer.removeEventListener('scroll', handleScroll);
-      scrollContainer.removeEventListener('wheel', handleWheel);
-    };
-  }, [hasMessages]);
 
   const simulateResponse = async (message: string) => {
     setIsSubmitting(true);
-    
+
     // Spotify authentication is required - user must be authenticated to use the app
-    
+
     try {
       // Call the Next.js API route which forwards to Flask backend
       const response = await fetch('/api/dj-recommend', {
@@ -521,11 +522,11 @@ export function AIInputWithLoadingDemo({
 
       if (response.ok) {
         const data: DJRecommendation = await response.json();
-        
+
         // Debug: Log the response
         console.log('DJ Recommendation Response:', data);
         console.log('Tracks received:', data.tracks?.length || 0);
-        
+
         // Debug: Check preview URLs
         if (data.tracks && data.tracks.length > 0) {
           const tracksWithPreview = data.tracks.filter((t: SpotifyTrack) => t.preview_url);
@@ -534,22 +535,22 @@ export function AIInputWithLoadingDemo({
           if (tracksWithoutPreview.length > 0) {
             console.log('Tracks without preview:', tracksWithoutPreview.map((t: SpotifyTrack) => t.name));
           }
-          
+
           // Debug: Log lyrics and explanations
           const tracksWithLyrics = data.tracks.filter((t: SpotifyTrack) => t.lyrics);
           const tracksWithExplanations = data.tracks.filter((t: SpotifyTrack) => t.lyrics_explanation);
           console.log(`📝 Lyrics available: ${tracksWithLyrics.length}/${data.tracks.length}`);
           console.log(`💡 Explanations available: ${tracksWithExplanations.length}/${data.tracks.length}`);
         }
-        
+
         // Add user message
-        const userMessage: Message = { 
+        const userMessage: Message = {
           id: generateMessageId(),
           dbId: data.user_message_db_id || undefined,
-          role: "user", 
-          content: message 
+          role: "user",
+          content: message
         };
-        
+
         // Add assistant response with tracks
         const assistantMessage: Message = {
           id: generateMessageId(),
@@ -559,7 +560,7 @@ export function AIInputWithLoadingDemo({
           tracks: data.tracks || [],
           likedTracks: new Set<string>(),
         };
-        
+
         // Add both messages in a single state update
         hasNewMessagesRef.current = true;
         historyLoadedRef.current = true;
@@ -570,17 +571,17 @@ export function AIInputWithLoadingDemo({
         try {
           const errJson = await response.json();
           if (errJson?.error) errorText = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
-        } catch {}
-        
-        const userMessage: Message = { 
+        } catch { }
+
+        const userMessage: Message = {
           id: generateMessageId(),
-          role: "user", 
-          content: message 
+          role: "user",
+          content: message
         };
-        const errorMessage: Message = { 
+        const errorMessage: Message = {
           id: generateMessageId(),
-          role: "assistant", 
-          content: errorText 
+          role: "assistant",
+          content: errorText
         };
         hasNewMessagesRef.current = true;
         historyLoadedRef.current = true;
@@ -588,10 +589,10 @@ export function AIInputWithLoadingDemo({
       }
     } catch (error) {
       console.error('Error submitting message:', error);
-      const userMessage: Message = { 
+      const userMessage: Message = {
         id: generateMessageId(),
-        role: "user", 
-        content: message 
+        role: "user",
+        content: message
       };
       const errorMessage: Message = {
         id: generateMessageId(),
@@ -611,8 +612,8 @@ export function AIInputWithLoadingDemo({
   if (isLoadingHistory) {
     return (
       <div className="flex flex-col h-screen items-center justify-center">
-        <Loader 
-          title="Loading chat history..." 
+        <Loader
+          title="Loading chat history..."
           subtitle="Please wait"
           size="md"
           className="text-white"
@@ -627,92 +628,146 @@ export function AIInputWithLoadingDemo({
   };
 
   return (
-    <div className="relative flex flex-col h-screen min-w-[350px] sm:min-w-[500px] md:min-w-[710px] w-full overflow-hidden">
-      {/* Top-left Rive DJ avatar */}
-      <div className="fixed top-5 md:left-[calc((100%-60rem)/2+1rem)] z-20 flex flex-col items-center gap-2">
-        <DynamicRiveAvatar
-          size={400}
-          src="/dj_avatar.riv"
-          stateMachine="State Machine 1"
-        />
-      </div>
-      {/* Messages container - using Conversation component - fills remaining space */}
-      <Conversation
-        ref={scrollContainerRef}
-        className={cn(
-          "flex-1 no-scrollbar overflow-y-auto relative",
-          !hasMessages && "flex items-center justify-center"
-        )}
-        style={{ 
-          overscrollBehavior: 'none', // Prevent overscroll bounce
-          scrollBehavior: 'smooth'
-        }}
-      >
-        {/* Progressive blur at top to prevent messages from reaching viewport edge */}
-        {hasMessages && (
-          <ProgressiveBlur 
-            position="top" 
-            backgroundColor="rgb(0, 0, 0)"
-            height="90px"
-            blurAmount="8px"
-          />
-        )}
-        <ConversationContent className={hasMessages ? "px-4 pt-[420px] pb-6" : "p-4 pt-[420px]"}>
-          <div className={cn(
-            "max-w-3xl w-full mx-auto flex flex-col",
-            (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
-          )}>
-            {messages.length === 0 && !isSubmitting && (
-              <div className="text-center text-gray-400 text-sm">
-                Start a conversation with your AI DJ
-              </div>
+    <div className="flex h-screen w-full bg-black text-white overflow-hidden font-sans p-2 gap-2">
+      {/* Sidebar - Hidden on mobile, visible on desktop */}
+      <div className="hidden md:flex w-80 flex-col gap-2 h-full shrink-0">
+        
+        {/* Scenarios Container */}
+        <div className="flex-1 flex flex-col bg-[#0F0F0F] rounded-3xl border border-white/5 p-4 overflow-hidden">
+          {/* Header / Scenarios Title */}
+          <div className="flex items-center justify-between px-2 py-2 mb-2">
+            <h2 className="text-xs font-medium text-gray-400 tracking-wider">SCENARIOS</h2>
+          </div>
+
+          {/* Scenarios List */}
+          <div className="flex-1 flex flex-col gap-1 overflow-y-auto pr-2 no-scrollbar">
+            {scenarios.map((scenario, i) => (
+              <button 
+                key={i}
+                onClick={() => simulateResponse(`Create a playlist for ${scenario.title}`)}
+                className="flex flex-col items-start p-3 rounded-xl transition-colors text-left hover:bg-[#1F1F1F] group"
+              >
+                <span className="text-white font-medium mb-0.5 text-sm group-hover:text-white/90">{scenario.title}</span>
+                <span className="text-xs text-gray-500 group-hover:text-gray-400">{scenario.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Avatar Card at Bottom */}
+        <div className="relative h-[300px] shrink-0 bg-[#F3E2A0] rounded-[32px] p-4 flex flex-col items-center justify-center shadow-xl overflow-visible group">
+          {/* Mute Toggle Button - Absolute Top Right of Card */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleMute();
+            }}
+            className={cn(
+              "absolute top-4 right-4 p-2 rounded-full bg-black/5 hover:bg-black/10 text-black transition-all z-40",
+              isMuted ? "opacity-50" : "opacity-100"
             )}
-            
+          >
+            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          </button>
+
+          <div className="text-black/40 text-[10px] font-bold tracking-widest absolute top-4 left-4">AI DJ</div>
+          
+          {/* Avatar Container - Centered & No Glass Background */}
+          <div className="w-full flex justify-center items-center z-10">
+            <div className="w-[280px] h-[240px]">
+              <DynamicRiveAvatar
+                size={440}
+                src="/dj_avatar.riv"
+                stateMachine="State Machine 1"
+                isTyping={isTyping}
+                className="bg-transparent border-none backdrop-blur-none"
+                containerSize={280}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Chat Area */}
+      <div className="flex-1 relative flex flex-col h-full bg-[#0F0F0F] rounded-3xl overflow-hidden shadow-2xl border border-white/5">
+        
+        {/* Messages container - using Conversation component - fills remaining space */}
+        <Conversation
+          ref={scrollContainerRef}
+          className="absolute inset-0 no-scrollbar overflow-y-auto z-0 snap-y snap-mandatory"
+          style={{
+            overscrollBehavior: 'none', // Prevent overscroll bounce
+            scrollBehavior: 'smooth',
+            scrollPaddingTop: '100px'
+          }}
+        >
+          {/* Progressive blur at top to prevent messages from reaching viewport edge */}
+          {hasMessages && (
+            <ProgressiveBlur
+              position="top"
+              backgroundColor="rgb(15, 15, 15)"
+              height="120px"
+              blurAmount="12px"
+            />
+          )}
+          <ConversationContent className={hasMessages ? "px-4 md:px-12 pt-[120px] pb-40" : "p-4 md:p-12 pt-[20vh]"}>
+            <div className={cn(
+              "max-w-3xl w-full mx-auto flex flex-col",
+              (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
+            )}>
+              {messages.length === 0 && !isSubmitting && (
+                <div className="text-center flex flex-col items-center gap-6 animate-in fade-in zoom-in duration-700">
+                  <div className="w-20 h-20 rounded-full bg-[#F3E2A0] flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(243,226,160,0.3)]">
+                     <MessageCircle size={40} className="text-black/80" />
+                  </div>
+                  <h2 className="text-2xl md:text-4xl font-bold text-white">How can I help you?</h2>
+                  <p className="text-gray-400 max-w-md text-lg">
+                    Ask me to play some music, create a playlist, or find songs for a specific mood.
+                  </p>
+                </div>
+              )}
+
             {(() => {
-              console.log('🎨 Rendering messages:', { 
-                count: messages.length, 
-                isSubmitting,
-                messages: messages.map(m => ({ 
-                  id: m.id, 
-                  role: m.role, 
-                  hasContent: !!m.content,
-                  hasTracks: !!m.tracks,
-                  trackCount: m.tracks?.length 
-                }))
+              console.log('🎨 Rendering messages:', {
+                count: messages.length,
+                isSubmitting
               });
               return null;
             })()}
-            
+
             {messages.map((msg, index) => {
               // Determine if we're currently processing (waiting for AI response)
               const isLastMessage = index === messages.length - 1;
               const isProcessingLastUserMessage = isSubmitting && msg.role === "user" && isLastMessage;
-              
+
               // Fade previous messages when processing (but don't hide them)
               const shouldFadePrevious = isSubmitting && !isLastMessage;
-              
+
               // Show assistant messages with content (intro text)
+              // Always show the content in the chat, not hidden for bubble
+              const isLatestAssistantMessage = msg.id === latestAssistantMessage?.id;
+
               if (msg.role === "assistant" && msg.content && (!msg.tracks || msg.tracks.length === 0)) {
-              return (
-                <motion.div
-                  key={msg.id}
-                  data-message-id={msg.id}
-                  initial={{ opacity: 0, y: 10 }}
+                return (
+                  <motion.div
+                    key={msg.id}
+                    data-message-id={msg.id}
+                    initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                    className="w-full flex gap-2 py-4 justify-start"
+                    transition={{ duration: 0.3 }}
+                    className="w-full flex gap-4 py-4 justify-start snap-start"
                   >
                     <div className="flex flex-col gap-2 items-start max-w-[85%]">
-                <div className={cn(
-                        "px-4 py-3 rounded-2xl break-word",
-                        "bg-white/5 text-white backdrop-blur-md border border-white/10 text-sm"
+                      <div className={cn(
+                        "px-5 py-4 rounded-2xl rounded-tl-none break-word",
+                        "bg-white/5 backdrop-blur-md border border-white/10 text-white text-sm shadow-md leading-relaxed"
                       )}>
-                        <TextAnimate 
-                          animation="fadeIn" 
+                        <TextAnimate
+                          animation="fadeIn"
                           by="line"
                           startOnView={false}
                           once={true}
-                          className="text-white"
+                          className="text-white/90"
                         >
                           {msg.content}
                         </TextAnimate>
@@ -721,7 +776,7 @@ export function AIInputWithLoadingDemo({
                   </motion.div>
                 );
               }
-              
+
               // Show assistant messages with tracks
               if (msg.role === "assistant" && msg.tracks && msg.tracks.length > 0) {
                 return (
@@ -733,27 +788,27 @@ export function AIInputWithLoadingDemo({
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.3 }}
-                        className="w-full flex gap-2 py-4 justify-start"
+                        className="w-full flex gap-4 py-4 justify-start snap-start"
                       >
                         <div className="flex flex-col gap-2 items-start max-w-[85%]">
-                  <div className={cn(
-                    "px-4 py-3 rounded-2xl break-word",
-                            "bg-white/5 text-white backdrop-blur-md border border-white/10 text-sm"
-                  )}>
-                    <TextAnimate 
-                      animation="fadeIn" 
-                      by="line"
-                      startOnView={false}
-                      once={true}
-                      className="text-white"
-                    >
-                      {msg.content}
-                    </TextAnimate>
-                  </div>
+                          <div className={cn(
+                            "px-5 py-4 rounded-2xl rounded-tl-none break-word",
+                            "bg-white/5 backdrop-blur-md border border-white/10 text-white text-sm shadow-md leading-relaxed"
+                          )}>
+                            <TextAnimate
+                              animation="fadeIn"
+                              by="line"
+                              startOnView={false}
+                              once={true}
+                              className="text-white/90"
+                            >
+                              {msg.content}
+                            </TextAnimate>
+                          </div>
                         </div>
                       </motion.div>
                     )}
-                    
+
                     {/* Show tracks */}
                     <motion.div
                       key={`${msg.id}-tracks`}
@@ -761,77 +816,77 @@ export function AIInputWithLoadingDemo({
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.3, delay: 0.2 }}
-                      className="w-full flex gap-2 py-4 justify-start"
+                      className="w-full flex gap-4 py-2 justify-start snap-start pl-1"
                     >
-                      <div className="flex flex-col gap-2 items-start max-w-[85%] w-full">
+                      <div className="flex flex-col gap-2 items-start max-w-[90%] w-full">
                         {/* Display tracks - with glass div styling */}
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4, delay: 0.2 }}
-                      className={cn(
-                        "w-full rounded-2xl p-4",
-                        msg.switched 
-                          ? "bg-transparent" 
-                          : "bg-white/5 backdrop-blur-md border border-white/10"
-                      )}
-                    >
-                      {!msg.switched && (
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="text-sm font-semibold text-white">
-                            🎵 Your Playlist ({msg.tracks.length} tracks)
-                          </h3>
-                        </div>
-                      )}
-                      {msg.switched ? (
-                        <AnimatedTrackCarousel tracks={msg.tracks} />
-                      ) : (
-                        <TrackList 
-                          tracks={msg.tracks} 
-                          likedTracks={msg.likedTracks || new Set()}
-                          onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
+                        <motion.div
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.4, delay: 0.2 }}
+                          className={cn(
+                            "w-full rounded-2xl p-4",
+                            msg.switched
+                              ? "bg-transparent"
+                              : "bg-white/5 backdrop-blur-md border border-white/10"
+                          )}
+                        >
+                          {!msg.switched && (
+                            <div className="flex items-center justify-between mb-3">
+                              <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
+                                🎵 Your Playlist <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60">{msg.tracks.length}</span>
+                              </h3>
+                            </div>
+                          )}
+                          {msg.switched ? (
+                            <AnimatedTrackCarousel tracks={msg.tracks} />
+                          ) : (
+                            <TrackList
+                              tracks={msg.tracks}
+                              likedTracks={msg.likedTracks || new Set()}
+                              onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
                               frequentlyLikedTerms={frequentlyLikedTerms}
-                        />
-                      )}
-                    </motion.div>
-                  
-                  {/* Action buttons for assistant messages - like, dislike, and switch */}
-                    <Actions className={cn("mt-2", msg.switched && "mt-1")}>
-                      <Action
-                        label="Like"
-                        tooltip="Like this response"
-                        onClick={() => handleLike(msg.id)}
-                        className={msg.liked ? "text-green-500" : ""}
-                      >
-                        <ThumbsUpIcon className="size-4" />
-                      </Action>
-                      <Action
-                        label="Dislike"
-                        tooltip="Dislike this response"
-                        onClick={() => handleDislike(msg.id)}
-                        className={msg.disliked ? "text-red-500" : ""}
-                      >
-                        <ThumbsDownIcon className="size-4" />
-                      </Action>
-                      <Action
-                        label="Switch"
-                        tooltip="Switch"
-                        onClick={() => handleSwitch(msg.id)}
-                        className={msg.switched ? "text-blue-500" : ""}
-                      >
-                        {msg.switched ? (
-                          <ToggleRight className="size-4" />
-                        ) : (
-                          <ToggleLeft className="size-4" />
-                        )}
-                      </Action>
-                    </Actions>
+                            />
+                          )}
+                        </motion.div>
+
+                        {/* Action buttons for assistant messages - like, dislike, and switch */}
+                        <Actions className={cn("mt-2", msg.switched && "mt-1")}>
+                          <Action
+                            label="Like"
+                            tooltip="Like this response"
+                            onClick={() => handleLike(msg.id)}
+                            className={msg.liked ? "text-green-500" : ""}
+                          >
+                            <ThumbsUpIcon className="size-4" />
+                          </Action>
+                          <Action
+                            label="Dislike"
+                            tooltip="Dislike this response"
+                            onClick={() => handleDislike(msg.id)}
+                            className={msg.disliked ? "text-red-500" : ""}
+                          >
+                            <ThumbsDownIcon className="size-4" />
+                          </Action>
+                          <Action
+                            label="Switch"
+                            tooltip="Switch View"
+                            onClick={() => handleSwitch(msg.id)}
+                            className={msg.switched ? "text-blue-500" : ""}
+                          >
+                            {msg.switched ? (
+                              <ToggleRight className="size-4" />
+                            ) : (
+                              <ToggleLeft className="size-4" />
+                            )}
+                          </Action>
+                        </Actions>
                       </div>
                     </motion.div>
                   </Fragment>
                 );
               }
-              
+
               // Show user messages in chat (aligned to top right like ChatGPT)
               if (msg.role === "user") {
                 return (
@@ -839,46 +894,46 @@ export function AIInputWithLoadingDemo({
                     key={msg.id}
                     data-message-id={msg.id}
                     initial={{ opacity: 0, y: 10 }}
-                    animate={{ 
-                      opacity: shouldFadePrevious ? 0.5 : 1, 
+                    animate={{
+                      opacity: shouldFadePrevious ? 0.5 : 1,
                       y: 0,
                       scale: isProcessingLastUserMessage ? 1.02 : 1
                     }}
                     transition={{ duration: 0.3 }}
                     className={cn(
-                      "w-full flex gap-2 py-4 justify-end items-start",
+                      "w-full flex gap-2 py-4 justify-end items-start snap-start",
                       isProcessingLastUserMessage && "z-10 relative"
                     )}
                   >
                     <div className="flex flex-col gap-2 items-end max-w-[75%]">
                       <div className={cn(
-                        "px-4 py-3 rounded-2xl break-word",
-                        "bg-white/5 text-white backdrop-blur-md border border-white/10 text-sm"
+                        "px-5 py-4 rounded-2xl rounded-tr-none break-word",
+                        "bg-[#A6D0DD] text-black text-sm shadow-sm font-medium leading-relaxed"
                       )}>
-                        <TextAnimate 
-                          animation="fadeIn" 
+                        <TextAnimate
+                          animation="fadeIn"
                           by="line"
                           startOnView={false}
                           once={true}
-                          className="text-white"
+                          className="text-black"
                         >
                           {msg.content}
                         </TextAnimate>
                       </div>
-                </div>
-              </motion.div>
-              );
+                    </div>
+                  </motion.div>
+                );
               }
-              
+
               return null;
             })}
-            
+
             {isSubmitting && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3 }}
-                className="flex items-start"
+                className="flex items-start gap-4"
               >
                 <div>
                   <AILoadingState />
@@ -888,22 +943,24 @@ export function AIInputWithLoadingDemo({
           </div>
         </ConversationContent>
       </Conversation>
-      
+
       {/* Input - at bottom of flex container, centered when no messages */}
       {/* Messages are clipped below this input area */}
       <div className={cn(
-        "w-full shrink-0 relative z-30",
-        !hasMessages && "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        "w-full z-30",
+        hasMessages
+          ? "absolute bottom-0 left-0 pb-6 pt-10 bg-linear-to-t from-[#0F0F0F] via-[#0F0F0F]/90 to-transparent"
+          : "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
       )}>
         <div
           className={cn(
             "w-full mx-auto relative z-20",
-            hasMessages 
-              ? "max-w-4xl px-4 py-6" 
-              : "max-w-4xl px-4 pt-6 pb-4 pointer-events-auto"
+            hasMessages
+              ? "max-w-4xl px-4 md:px-12"
+              : "max-w-4xl px-4 pb-4 pointer-events-auto"
           )}
         >
-          <ChatGPTPromptInput 
+          <ChatGPTPromptInput
             onSubmit={simulateResponse}
             loadingDuration={3000}
             submitted={isSubmitting}
@@ -911,8 +968,10 @@ export function AIInputWithLoadingDemo({
             onSpotifyClick={handleSpotifyConnect}
             minHeight={56}
             maxHeight={200}
+            className="bg-white/5 backdrop-blur-xl border-white/10 shadow-xl"
           />
         </div>
+      </div>
       </div>
     </div>
   );
