@@ -1,7 +1,7 @@
 "use client";
 
 import { ChatGPTPromptInput } from "@/components/ui/chatgpt-prompt-input";
-import { useState, useEffect, Fragment, useRef, useMemo } from "react";
+import { useState, useEffect, Fragment, useRef, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import AILoadingState from "@/components/kokonutui/ai-loading";
 import Loader from "@/components/kokonutui/loader";
@@ -14,7 +14,8 @@ import {
   ThumbsUpIcon,
   ToggleLeft,
   ToggleRight,
-  MessageCircle, X, Volume2, VolumeX
+  X, Volume2, VolumeX,
+  Music, Play, Radio, User, FileText, Calendar, MessageSquare, MoreHorizontal, CheckCircle
 } from "lucide-react";
 import { useTextToSpeech } from "@/components/hooks/use-text-to-speech";
 import { Action, Actions } from "@/components/ui/actions";
@@ -25,6 +26,9 @@ import {
 import { cn } from "@/lib/utils";
 import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import dynamic from "next/dynamic";
+import { WebGLShader } from "@/components/ui/web-gl-shader";
+import { useUser } from "@clerk/nextjs";
+import { ImageCarouselHero, type ImageCard } from "@/components/ui/image-carousel-hero";
 
 const DynamicRiveAvatar = dynamic(
   () => import("./dj-rive-avatar").then((m) => m.DjRiveAvatar),
@@ -60,10 +64,12 @@ const scenarios = [
 export function AIInputWithLoadingDemo({
   spotifyConnected = false
 }: AIInputWithLoadingDemoProps) {
+  const { isSignedIn } = useUser();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
+  const [heroImages, setHeroImages] = useState<ImageCard[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -80,8 +86,13 @@ export function AIInputWithLoadingDemo({
   // Ref for scroll container to prevent scrolling past top
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load frequently liked terms
-  const loadFrequentlyLikedTerms = async () => {
+  // Load frequently liked terms (only when signed in)
+  const loadFrequentlyLikedTerms = useCallback(async () => {
+    // Only load if user is signed in
+    if (!isSignedIn) {
+      return;
+    }
+
     try {
       const response = await fetch('/api/frequently-liked-terms?min_occurrences=2', {
         credentials: 'include',
@@ -93,12 +104,56 @@ export function AIInputWithLoadingDemo({
         setFrequentlyLikedTerms(termsSet);
         console.log(`✅ Loaded ${termsSet.size} frequently liked terms`);
       } else {
+        // Silently fail if not authenticated (401/403) - don't log as error
+        if (response.status === 401 || response.status === 403) {
+          return;
+        }
         console.error('Failed to load frequently liked terms');
       }
     } catch (error) {
+      // Silently fail if network error - don't log as error for unauthenticated users
+      if (!isSignedIn) {
+        return;
+      }
       console.error('Error loading frequently liked terms:', error);
     }
-  };
+  }, [isSignedIn]);
+
+  // Load user profile for hero images
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!spotifyConnected) return;
+      
+      try {
+        const response = await fetch('/api/get-user-profile', {
+          credentials: 'include',
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.top_artists) {
+            const images: ImageCard[] = data.top_artists
+              .filter((artist: any) => artist.images && artist.images.length > 0)
+              .map((artist: any, index: number) => ({
+                id: `artist-${index}`,
+                src: artist.images[0].url,
+                alt: artist.name,
+                rotation: (index * 10) - 10 // Slight rotation variation
+              }))
+              .slice(0, 6); // Take top 6
+            
+            if (images.length > 0) {
+              setHeroImages(images);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+      }
+    };
+
+    fetchUserProfile();
+  }, [spotifyConnected]);
 
   // Generate unique ID for messages
   const generateMessageId = () => `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -292,8 +347,14 @@ export function AIInputWithLoadingDemo({
     });
   }, [messages]);
 
-  // Load chat history and liked tracks on mount
+  // Load chat history and liked tracks on mount (only when signed in)
   useEffect(() => {
+    // Skip loading history if user is not signed in
+    if (!isSignedIn) {
+      setIsLoadingHistory(false);
+      return;
+    }
+
     const abortController = new AbortController();
     let isMounted = true;
 
@@ -443,18 +504,18 @@ export function AIInputWithLoadingDemo({
       isMounted = false;
       abortController.abort();
     };
-  }, []);
+  }, [isSignedIn]);
 
-  // Load frequently liked terms after history is loaded
+  // Load frequently liked terms after history is loaded (only when signed in)
   useEffect(() => {
-    if (!isLoadingHistory) {
+    if (!isLoadingHistory && isSignedIn) {
       // Load after a short delay to ensure likes are saved
       const timer = setTimeout(() => {
         loadFrequentlyLikedTerms();
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [isLoadingHistory]);
+  }, [isLoadingHistory, isSignedIn, loadFrequentlyLikedTerms]);
 
   // Find the latest assistant message to display in the speech bubble
   // Use useMemo to prevent unnecessary recalculations and flashing
@@ -683,49 +744,137 @@ export function AIInputWithLoadingDemo({
                 className="bg-transparent border-none backdrop-blur-none"
                 containerSize={280}
               />
-            </div>
-          </div>
-        </div>
+                  </div>
+                  </div>
+      </div>
       </div>
 
       {/* Main Chat Area */}
       <div className="flex-1 relative flex flex-col h-full bg-[#0F0F0F] rounded-3xl overflow-hidden shadow-2xl border border-white/5">
+        <WebGLShader className="absolute inset-0 w-full h-full pointer-events-none" />
         
-        {/* Messages container - using Conversation component - fills remaining space */}
-        <Conversation
-          ref={scrollContainerRef}
+      {/* Messages container - using Conversation component - fills remaining space */}
+      <Conversation
+        ref={scrollContainerRef}
           className="absolute inset-0 no-scrollbar overflow-y-auto z-0 snap-y snap-mandatory"
-          style={{
-            overscrollBehavior: 'none', // Prevent overscroll bounce
-            scrollBehavior: 'smooth',
+        style={{
+          overscrollBehavior: 'none', // Prevent overscroll bounce
+          scrollBehavior: 'smooth',
             scrollPaddingTop: '100px'
-          }}
-        >
-          {/* Progressive blur at top to prevent messages from reaching viewport edge */}
-          {hasMessages && (
-            <ProgressiveBlur
-              position="top"
+        }}
+      >
+        {/* Progressive blur at top to prevent messages from reaching viewport edge */}
+        {hasMessages && (
+          <ProgressiveBlur
+            position="top"
               backgroundColor="rgb(15, 15, 15)"
-              height="120px"
+              height="80px"
               blurAmount="12px"
-            />
-          )}
-          <ConversationContent className={hasMessages ? "px-4 md:px-12 pt-[120px] pb-40" : "p-4 md:p-12 pt-[20vh]"}>
-            <div className={cn(
-              "max-w-3xl w-full mx-auto flex flex-col",
-              (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
-            )}>
-              {messages.length === 0 && !isSubmitting && (
-                <div className="text-center flex flex-col items-center gap-6 animate-in fade-in zoom-in duration-700">
-                  <div className="w-20 h-20 rounded-full bg-[#F3E2A0] flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(243,226,160,0.3)]">
-                     <MessageCircle size={40} className="text-black/80" />
+          />
+        )}
+          <ConversationContent className={hasMessages ? "pt-20 pb-40" : "pt-[10vh] pb-20 flex flex-col justify-start min-h-full"}>
+          <div className={cn(
+              "max-w-4xl w-full mx-auto flex flex-col gap-8 px-4 md:px-12",
+            (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
+          )}>
+            {messages.length === 0 && !isSubmitting && (
+                <div className="w-full flex flex-col items-center gap-8 animate-in fade-in zoom-in duration-700 origin-center">
+                  {/* Header */}
+                  <div className="text-center space-y-3 mt-0">
+                    <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
+                      Hi, there <span className="animate-wave inline-block">👋</span>
+                    </h1>
+                    <p className="text-base text-white/60 max-w-md mx-auto">
+                      Tell me what you want to hear, and I&apos;ll handle the mix.
+                    </p>
                   </div>
-                  <h2 className="text-2xl md:text-4xl font-bold text-white">How can I help you?</h2>
-                  <p className="text-gray-400 max-w-md text-lg">
-                    Ask me to play some music, create a playlist, or find songs for a specific mood.
-                  </p>
-                </div>
-              )}
+
+                  {/* Cards Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-4xl">
+                    {/* Card 1: Dark Accent */}
+                    <div className="group relative p-6 rounded-3xl bg-black/40 border border-white/10 backdrop-blur-md hover:bg-black/60 transition-all cursor-pointer overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4">
+                        <span className="px-3 py-1 rounded-full bg-blue-500 text-[10px] font-semibold text-white">Beta</span>
+                      </div>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white">
+                          <User size={16} />
+                        </div>
+                        <span className="text-sm font-medium text-white">AI DJ</span>
+                      </div>
+                      <p className="text-white/80 text-sm leading-relaxed mb-4">
+                        Designed to analyze your mood and curate the perfect playlist for any moment.
+                      </p>
+                      <div className="absolute bottom-0 left-0 w-full h-1 bg-linear-to-r from-blue-500 to-purple-500 opacity-50" />
+                    </div>
+
+                    {/* Card 2: List */}
+                    <div className="p-6 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-md hover:bg-white/10 transition-all cursor-pointer">
+                      <div className="space-y-4">
+                        <button 
+                          onClick={() => simulateResponse("Create a workout mix")}
+                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
+                        >
+                          <FileText size={16} className="text-blue-400 shrink-0" />
+                          <span>Create a workout mix</span>
+                        </button>
+                        <button 
+                          onClick={() => simulateResponse("Help me discover new artists")}
+                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
+                        >
+                          <Radio size={16} className="text-purple-400 shrink-0" />
+                          <span>Discover new artists</span>
+                        </button>
+                        <button 
+                          onClick={() => simulateResponse("Explain the lyrics of the current song")}
+                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
+                        >
+                          <MessageSquare size={16} className="text-green-400 shrink-0" />
+                          <span>Explain these lyrics</span>
+                        </button>
+                      </div>
+                      <div className="mt-6 flex justify-between items-center">
+                        <span className="text-xs text-white/40">Suggested Actions</span>
+                        <span className="text-xs text-blue-400 hover:underline">View All</span>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Prompt */}
+                    <button 
+                      onClick={() => simulateResponse("Play some upbeat pop for a road trip with friends")}
+                      className="relative p-6 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-md hover:bg-white/10 transition-all cursor-pointer group text-left w-full"
+                    >
+                      <div className="absolute top-4 right-4">
+                        <MoreHorizontal size={16} className="text-white/40" />
+                      </div>
+                      <h3 className="text-sm font-medium text-white mb-2">Try this prompt</h3>
+                      <p className="text-lg font-medium text-white/90 leading-snug mb-4 group-hover:text-blue-300 transition-colors">
+                        &quot;Play some upbeat pop for a road trip with friends&quot;
+                      </p>
+                      <div className="text-xs text-white/40">Click to send</div>
+                    </button>
+                  </div>
+
+                  {/* Pill Buttons */}
+                  <div className="flex flex-wrap justify-center gap-3 w-full mt-4">
+                    {[
+                      { icon: Calendar, label: "Recent Mixes", action: () => simulateResponse("Show my recent mixes") },
+                      { icon: Play, label: "Start Radio", action: () => simulateResponse("Start a radio station based on my taste") },
+                      { icon: CheckCircle, label: "Connect Spotify", action: handleSpotifyConnect },
+                      { icon: Music, label: "Browse Genres", action: () => simulateResponse("Browse music genres") }
+                    ].map((item, i) => (
+                      <button 
+                        key={i}
+                        onClick={item.action}
+                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:scale-105 transition-all text-sm text-white/80 hover:text-white backdrop-blur-md"
+                      >
+                        <item.icon size={14} className="opacity-70" />
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+              </div>
+            )}
 
             {(() => {
               console.log('🎨 Rendering messages:', {
@@ -944,21 +1093,12 @@ export function AIInputWithLoadingDemo({
         </ConversationContent>
       </Conversation>
 
-      {/* Input - at bottom of flex container, centered when no messages */}
-      {/* Messages are clipped below this input area */}
+      {/* Input - always at bottom */}
       <div className={cn(
-        "w-full z-30",
-        hasMessages
-          ? "absolute bottom-0 left-0 pb-6 pt-10 bg-linear-to-t from-[#0F0F0F] via-[#0F0F0F]/90 to-transparent"
-          : "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        "w-full z-30 absolute bottom-0 left-0 pb-6 pt-10 bg-linear-to-t from-[#0F0F0F] via-[#0F0F0F]/90 to-transparent"
       )}>
         <div
-          className={cn(
-            "w-full mx-auto relative z-20",
-            hasMessages
-              ? "max-w-4xl px-4 md:px-12"
-              : "max-w-4xl px-4 pb-4 pointer-events-auto"
-          )}
+          className="w-full mx-auto relative z-20 max-w-4xl px-4 md:px-12"
         >
           <ChatGPTPromptInput
             onSubmit={simulateResponse}
@@ -971,7 +1111,7 @@ export function AIInputWithLoadingDemo({
             className="bg-white/5 backdrop-blur-xl border-white/10 shadow-xl"
           />
         </div>
-      </div>
+        </div>
       </div>
     </div>
   );

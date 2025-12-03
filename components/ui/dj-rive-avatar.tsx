@@ -27,19 +27,12 @@ export function DjRiveAvatar({
   alignment = Alignment.Center,
   src = "/dj_avatar.riv",
   isTracking: externalIsTracking,
-  isTyping: _isTyping, // Reserved for future use
+  isTyping,
 }: DjRiveAvatarProps) {
-  // Suppress unused parameter warning - reserved for future typing animation
-  void _isTyping;
   const [isTracking, setIsTracking] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastMoveTimeRef = useRef<number>(0);
+  const lastMoveTimeRef = useRef<number>(Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Initialize lastMoveTimeRef on mount
-  useEffect(() => {
-    lastMoveTimeRef.current = Date.now();
-  }, []);
 
   // Calculate container size (50% of avatar size if not specified - smaller background)
   const actualContainerSize = containerSize ?? Math.round(size * 0.5);
@@ -148,10 +141,8 @@ export function DjRiveAvatar({
   useEffect(() => {
     if (isTrackingInput && rive) {
       try {
-        // Rive state machine inputs are mutable by design
-        // eslint-disable-next-line react-hooks/immutability
         isTrackingInput.value = trackingValue;
-      } catch {
+      } catch (e) {
         // Ignore errors if runtime is not ready or disposed
       }
     }

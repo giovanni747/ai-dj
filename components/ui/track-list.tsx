@@ -5,7 +5,7 @@ import { useState, useRef, useEffect } from "react";
 import type { SpotifyTrack } from "@/types";
 import { formatDuration, getAlbumArt } from "@/lib/track-utils";
 import { cn } from "@/lib/utils";
-import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText, BookmarkIcon } from "lucide-react";
+import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText } from "lucide-react";
 import { highlightLyricsTerms } from "@/lib/lyrics-highlight";
 import { Button } from "@/components/ui/button";
 
@@ -410,54 +410,29 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                         }
                         return null;
                       })()}
-                      {/* Bookmark button - only show for non-English lyrics */}
-                      {(() => {
-                        // Show if language is explicitly not English
-                        const isNonEnglish = track.lyrics_language && track.lyrics_language !== 'en';
-                        // Or if translation happened (original differs from translated)
-                        const wasTranslated = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
-                        
-                        // Debug log
-                        if (track.lyrics) {
-                          console.log(`[BOOKMARK CHECK] ${track.name}:`, {
-                            lyrics_language: track.lyrics_language,
-                            isNonEnglish,
-                            wasTranslated,
-                            showButton: isNonEnglish || wasTranslated
-                          });
-                        }
-                        
-                        if (isNonEnglish || wasTranslated) {
-                          return (
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-7 w-7 border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                // Add bookmark functionality here
-                                console.log('Bookmark clicked for track:', track.name, 'Language:', track.lyrics_language);
-                              }}
-                              title="Bookmark"
-                            >
-                              <BookmarkIcon className="w-3.5 h-3.5" />
-                              <span className="sr-only">Bookmark</span>
-                            </Button>
-                          );
-                        }
-                        return null;
-                      })()}
                     </div>
                   </div>
                   {expandedTracks.has(`${track.id}-lyrics`) && (
                     <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto overflow-x-hidden relative whitespace-pre-wrap">
-                      {highlightLyricsTerms(
-                        (showTranslatedLyrics.get(track.id) ?? true) && track.lyrics
+                      {(() => {
+                        const showingTranslated = showTranslatedLyrics.get(track.id) ?? true;
+                        const lyricsToShow = showingTranslated && track.lyrics
                           ? track.lyrics
-                          : (track.lyrics_original || track.lyrics || ''),
+                          : (track.lyrics_original || track.lyrics || '');
+                        
+                        // Only apply highlighting to English lyrics (translated version)
+                        // Original language lyrics won't have matching terms, so show plain text
+                        if (showingTranslated && track.lyrics) {
+                          return highlightLyricsTerms(
+                            lyricsToShow,
                         track.highlighted_terms || [],
                         frequentlyLikedTerms
-                      )}
+                          );
+                        }
+                        
+                        // Show original lyrics without highlighting
+                        return lyricsToShow;
+                      })()}
                     </div>
                   )}
                 </div>

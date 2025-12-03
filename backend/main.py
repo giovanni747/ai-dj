@@ -717,7 +717,8 @@ def get_user_profile():
                 {
                     'name': artist['name'],
                     'popularity': artist['popularity'],
-                    'genres': artist.get('genres', [])
+                    'genres': artist.get('genres', []),
+                    'images': artist.get('images', [])
                 }
                 for artist in top_artists['items'][:10]
             ]

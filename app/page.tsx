@@ -67,34 +67,24 @@ export default function Home() {
         </div>
       </SignedIn>
       
-      {/* Sign-in modal when not signed in */}
+      {/* Sign In button in top right when signed out */}
       <SignedOut>
-        <div className="relative z-10 flex min-h-screen items-center justify-center pointer-events-none">
-          <div className="text-center pointer-events-auto">
-            <div className="max-w-md mx-auto p-8 rounded-2xl bg-white/5 backdrop-blur-2xl border border-white/10">
-              <div className="mb-6">
-                <h1 className="text-3xl font-semibold text-white mb-2">AI DJ</h1>
-                <p className="text-gray-300">Sign in to get personalized music recommendations</p>
-              </div>
-              <SignInButton mode="modal">
-                <button className="w-full bg-white hover:bg-gray-100 text-black font-medium px-6 py-3 rounded-lg transition-colors">
-                  Sign In
-                </button>
-              </SignInButton>
-            </div>
-          </div>
+        <div className="fixed top-4 right-4 z-50 pointer-events-auto">
+          <SignInButton mode="modal">
+            <button className="bg-white hover:bg-gray-100 text-black font-medium px-4 py-2 rounded-full transition-colors shadow-lg text-sm">
+              Sign In
+            </button>
+          </SignInButton>
         </div>
       </SignedOut>
       
-      {/* Main app when signed in */}
-      <SignedIn>
-        <div className="relative z-10">
-          <AIInputWithLoadingDemo 
-            spotifyConnected={spotifyConnected}
-            onSpotifyReconnect={checkSpotifyConnection}
-          />
-        </div>
-      </SignedIn>
+      {/* Main app always visible */}
+      <div className="relative z-10">
+        <AIInputWithLoadingDemo 
+          spotifyConnected={spotifyConnected}
+          onSpotifyReconnect={checkSpotifyConnection}
+        />
+      </div>
     </div>
   );
 }
