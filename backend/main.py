@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import json
 import requests
@@ -13,6 +14,7 @@ from spotipy.cache_handler import CacheHandler
 from ai_service import GroqRecommendationService
 from db import store_token, get_token, delete_token
 from chat_db import chat_db
+from rate_limiter import get_rate_limit_status
 
 # Genius API for lyrics
 try:
@@ -27,6 +29,84 @@ try:
 except ImportError:
     genius = None
     print("⚠️  lyricsgenius not installed - lyrics will not be available")
+
+# Weather API (OpenWeatherMap)
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+WEATHER_BASE_URL = "http://api.openweathermap.org/data/2.5/weather"
+
+def get_weather_data(lat=None, lon=None, city=None):
+    """
+    Fetch weather data from OpenWeatherMap API.
+    
+    Args:
+        lat: Latitude (optional)
+        lon: Longitude (optional)
+        city: City name (optional, e.g., "London,UK")
+    
+    Returns:
+        Dict with weather info or None if error
+    """
+    print(f"🌤️ [WEATHER DEBUG] get_weather_data called with: lat={lat}, lon={lon}, city={city}", flush=True)
+    sys.stdout.flush()
+    
+    if not WEATHER_API_KEY:
+        print("🌤️ [WEATHER DEBUG] ⚠️  WEATHER_API_KEY not found - weather data will not be available", flush=True)
+        sys.stdout.flush()
+        return None
+    
+    try:
+        params = {
+            'appid': WEATHER_API_KEY,
+            'units': 'metric'  # Use 'imperial' for Fahrenheit
+        }
+        
+        if lat and lon:
+            params['lat'] = lat
+            params['lon'] = lon
+            print(f"🌤️ [WEATHER DEBUG] Using coordinates: {lat}, {lon}", flush=True)
+        elif city:
+            params['q'] = city
+            print(f"🌤️ [WEATHER DEBUG] Using city: {city}", flush=True)
+        else:
+            # Default to New York if no location provided
+            params['q'] = 'New York,US'
+            print(f"🌤️ [WEATHER DEBUG] Using default location: New York,US", flush=True)
+        
+        print(f"🌤️ [WEATHER DEBUG] Making API request to: {WEATHER_BASE_URL}", flush=True)
+        print(f"🌤️ [WEATHER DEBUG] Request params: {dict((k, v if k != 'appid' else '***') for k, v in params.items())}", flush=True)
+        sys.stdout.flush()
+        
+        response = requests.get(WEATHER_BASE_URL, params=params, timeout=5)
+        print(f"🌤️ [WEATHER DEBUG] API response status: {response.status_code}", flush=True)
+        sys.stdout.flush()
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        weather_result = {
+            'temperature': data['main']['temp'],
+            'feels_like': data['main']['feels_like'],
+            'description': data['weather'][0]['description'],
+            'condition': data['weather'][0]['main'],  # e.g., "Rain", "Clear", "Clouds"
+            'humidity': data['main']['humidity'],
+            'city': data['name'],
+            'country': data['sys']['country']
+        }
+        
+        print(f"🌤️ [WEATHER DEBUG] ✅ Weather data retrieved successfully:", flush=True)
+        print(f"   - City: {weather_result['city']}, {weather_result['country']}", flush=True)
+        print(f"   - Temperature: {weather_result['temperature']}°C (feels like {weather_result['feels_like']}°C)", flush=True)
+        print(f"   - Condition: {weather_result['condition']} ({weather_result['description']})", flush=True)
+        print(f"   - Humidity: {weather_result['humidity']}%", flush=True)
+        sys.stdout.flush()
+        
+        return weather_result
+    except Exception as e:
+        print(f"🌤️ [WEATHER DEBUG] ⚠️  Error fetching weather: {type(e).__name__}: {e}", flush=True)
+        import traceback
+        print(f"🌤️ [WEATHER DEBUG] Traceback: {traceback.format_exc()}", flush=True)
+        sys.stdout.flush()
+        return None
 
 
 env_path = Path(__file__).parent.parent / '.env'
@@ -726,8 +806,20 @@ def get_user_profile():
     except Exception as e:
         return {'error': str(e)}, 500
 
-def get_user_profile_data(sp):
-    """Helper to get user profile data for AI recommendations"""
+def get_user_profile_data(sp, clerk_id=None):
+    """
+    Helper to get user profile data for AI recommendations
+    Uses Redis caching to reduce API calls and improve speed
+    """
+    from redis_cache import get_cached_user_profile, cache_user_profile
+    
+    # Try to get from cache first
+    if clerk_id:
+        cached_profile = get_cached_user_profile(clerk_id)
+        if cached_profile:
+            print(f"✅ Using cached user profile for {clerk_id}")
+            return cached_profile
+    
     try:
         print(f"\n=== FETCHING REAL SPOTIFY USER PROFILE ===")
         
@@ -775,6 +867,11 @@ def get_user_profile_data(sp):
         print(f"  Genres: {profile_data['genres'][:10]}")
         print(f"====================================\n")
         
+        # Cache the profile for future requests
+        if clerk_id:
+            cache_user_profile(clerk_id, profile_data)
+            print(f"✅ Cached user profile for {clerk_id}")
+        
         return profile_data
         
     except Exception as e:
@@ -800,12 +897,15 @@ def chat():
         if not user_message:
             return jsonify({"error": "Message is required"}), 400
         
+        # Get Clerk user ID for caching
+        clerk_id = session.get('clerk_user_id')
+        
         # Get conversation history from session
         conversation_history = session.get('conversation_history', [])
         
-        # Get user profile - MUST use real Spotify data
+        # Get user profile - MUST use real Spotify data (with caching)
         try:
-            user_profile = get_user_profile_data(sp)
+            user_profile = get_user_profile_data(sp, clerk_id)
         except ValueError as e:
             print(f"❌ Failed to get user profile: {e}")
             return jsonify({"error": str(e)}), 500
@@ -820,7 +920,7 @@ def chat():
         # Update conversation history
         conversation_history.append({"role": "user", "content": user_message})
         conversation_history.append({"role": "assistant", "content": ai_response})
-        session['conversation_history'] = conversation_history[-10:]  # Keep last 10 messages
+        session['conversation_history'] = conversation_history[-6:]  # Keep last 6 messages (optimized for token usage)
         
         return jsonify({
             "response": ai_response,
@@ -841,9 +941,12 @@ def analyze_profile():
         return redirect_response
     
     try:
-        # Get user profile - MUST use real Spotify data
+        # Get Clerk user ID for caching
+        clerk_id = session.get('clerk_user_id')
+        
+        # Get user profile - MUST use real Spotify data (with caching)
         try:
-            user_profile = get_user_profile_data(sp)
+            user_profile = get_user_profile_data(sp, clerk_id)
         except ValueError as e:
             print(f"❌ Failed to get user profile: {e}")
             return jsonify({"error": str(e)}), 500
@@ -855,6 +958,15 @@ def analyze_profile():
             "analysis": analysis,
             "profile": user_profile
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/status', methods=['GET'])
+def api_status():
+    """Get current API status and rate limits"""
+    try:
+        status = get_rate_limit_status()
+        return jsonify(status)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -870,10 +982,55 @@ def dj_recommend():
         
         data = request.json
         user_message = data.get('message', 'recommend me some great songs')
+        selected_tool = data.get('tool')
         
-        # Get user profile - MUST use real Spotify data
+        # Get weather data if weather tool is selected
+        weather_data = None
+        print(f"🌤️ [WEATHER DEBUG] Checking tool: selected_tool={selected_tool}", flush=True)
+        sys.stdout.flush()
+        
+        if selected_tool == 'weather':
+            print("🌤️ [WEATHER DEBUG] ✅ Weather tool selected - fetching weather data...", flush=True)
+            sys.stdout.flush()
+            # Get location from request if available
+            location = data.get('location')
+            print(f"🌤️ [WEATHER DEBUG] Location from request: {location}", flush=True)
+            print(f"🌤️ [WEATHER DEBUG] Location type: {type(location)}", flush=True)
+            sys.stdout.flush()
+            
+            lat = location.get('lat') if location and isinstance(location, dict) else None
+            lon = location.get('lon') if location and isinstance(location, dict) else None
+            
+            print(f"🌤️ [WEATHER DEBUG] Extracted coordinates: lat={lat}, lon={lon}", flush=True)
+            sys.stdout.flush()
+            
+            if lat and lon:
+                print(f"🌤️ [WEATHER DEBUG] 📍 Using user location: {lat}, {lon}", flush=True)
+                sys.stdout.flush()
+                weather_data = get_weather_data(lat=lat, lon=lon)
+            else:
+                print("🌤️ [WEATHER DEBUG] 📍 No user location provided, using default (New York)", flush=True)
+                sys.stdout.flush()
+                weather_data = get_weather_data()
+            
+            if weather_data:
+                print(f"🌤️ [WEATHER DEBUG] ✅ Weather data fetched successfully:", flush=True)
+                print(f"   - {weather_data['description']}, {weather_data['temperature']}°C in {weather_data['city']}", flush=True)
+                print(f"🌤️ [WEATHER DEBUG] Weather data object: {weather_data}", flush=True)
+                sys.stdout.flush()
+            else:
+                print("🌤️ [WEATHER DEBUG] ⚠️  Failed to fetch weather data - weather_data is None", flush=True)
+                sys.stdout.flush()
+        else:
+            print(f"🌤️ [WEATHER DEBUG] Weather tool not selected (tool: {selected_tool}), skipping weather fetch", flush=True)
+            sys.stdout.flush()
+        
+        # Get Clerk user ID for caching
+        clerk_id = session.get('clerk_user_id')
+        
+        # Get user profile - MUST use real Spotify data (with caching)
         try:
-            user_profile = get_user_profile_data(sp)
+            user_profile = get_user_profile_data(sp, clerk_id)
         except ValueError as e:
             # If get_user_profile_data fails, return error (no mock data)
             print(f"❌ Failed to get user profile: {e}")
@@ -929,10 +1086,16 @@ def dj_recommend():
         conversation_history = session.get('conversation_history', [])
         
         # Get AI recommendations (JSON with intro + songs list)
+        print(f"🌤️ [WEATHER DEBUG] Calling AI service with weather_data: {weather_data is not None}", flush=True)
+        if weather_data:
+            print(f"🌤️ [WEATHER DEBUG] Weather data being passed to AI: {weather_data}", flush=True)
+        sys.stdout.flush()
+        
         ai_response_raw = ai_service.get_recommendations(
             user_message,
             user_profile,
-            conversation_history
+            conversation_history,
+            weather_data=weather_data
         )
         
         # Log raw AI response
@@ -1317,9 +1480,9 @@ def dj_recommend():
         if len(tracks) < 5:
             print(f"WARNING: Only found {len(tracks)} tracks. Consider adding fallback logic.")
         
-        # Fetch lyrics for all tracks (should be 8), then batch score
+        # Fetch lyrics for all tracks (should be 6), then batch score
         print(f"\n=== FETCHING LYRICS & BATCH SCORING RELEVANCE ===")
-        print(f"Processing {len(tracks)} tracks (expecting 8)")
+        print(f"Processing {len(tracks)} tracks (expecting 6)")
         
         # First, fetch all lyrics
         tracks_with_lyrics = []
@@ -1343,6 +1506,11 @@ def dj_recommend():
                     # Check if lyrics were actually translated
                     lyrics_changed = lyrics_data['original'] != lyrics_data['translated']
                     is_non_english = lyrics_data['language'] != 'en'
+                    
+                    # Debug: Show first 100 chars of each
+                    print(f"  🔍 Original preview: {lyrics_data['original'][:100]}...")
+                    print(f"  🔍 Translated preview: {lyrics_data['translated'][:100]}...")
+                    print(f"  🔍 Are different: {lyrics_changed}, Is non-English: {is_non_english}")
                     
                     print(f"  🌐 Language: {lyrics_data['language']} | Non-English: {is_non_english} | Translated: {lyrics_changed}")
                     
@@ -1422,21 +1590,22 @@ def dj_recommend():
             
             print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score:.1f}, Combined={combined_score:.1f}")
         
-        # Sort by combined score (highest first) and take top 8 (safety measure in case we got more than 8)
+        # Sort by combined score (highest first) and take top 6 (safety measure in case we got more than 6)
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
-        selected_tracks = tracks_with_scores[:8]
+        selected_tracks = tracks_with_scores[:6]
         
         print(f"\n✅ Selected top {len(selected_tracks)} tracks based on lyrics + audio features")
         for i, track in enumerate(selected_tracks, 1):
             print(f"  {i}. {track['name']} - Score: {track.get('combined_score', 0):.1f}")
         
-        # Generate explanations only for the final 8 selected tracks
+        # Generate explanations only for the final 6 selected tracks
         print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS ===")
         print(f"Processing {len(selected_tracks)} tracks for explanations...")
         for i, track in enumerate(selected_tracks, 1):
             print(f"\n[{i}/{len(selected_tracks)}] Generating explanation for: {track['name']} by {track['artist']}")
             if track.get('lyrics'):
                 try:
+                    # Generate explanation from English lyrics
                     explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
                         lyrics=track['lyrics'],
                         track_name=track['name'],
@@ -1445,6 +1614,36 @@ def dj_recommend():
                     )
                     track['lyrics_explanation'] = explanation
                     track['highlighted_terms'] = highlighted_terms if highlighted_terms else []
+                    
+                    # Debug: Check lyrics data
+                    has_original = bool(track.get('lyrics_original'))
+                    has_translated = bool(track.get('lyrics'))
+                    are_different = track.get('lyrics_original') != track.get('lyrics') if has_original and has_translated else False
+                    print(f"  🔍 Lyrics check: has_original={has_original}, has_translated={has_translated}, are_different={are_different}")
+                    if has_original and has_translated:
+                        print(f"     Original length: {len(track['lyrics_original'])} chars, Translated length: {len(track['lyrics'])} chars")
+                        print(f"     Language: {track.get('lyrics_language', 'unknown')}")
+                    
+                    # If original lyrics exist and are different, generate highlighted terms for them too
+                    if track.get('lyrics_original') and track['lyrics_original'] != track['lyrics']:
+                        print(f"  🌐 Generating highlighted terms for original language lyrics...")
+                        try:
+                            _, highlighted_terms_original = ai_service.explain_lyrics_relevance(
+                                lyrics=track['lyrics_original'],
+                                track_name=track['name'],
+                                artist_name=track['artist'],
+                                user_prompt=user_message
+                            )
+                            track['highlighted_terms_original'] = highlighted_terms_original if highlighted_terms_original else []
+                            print(f"  ✅ Generated {len(highlighted_terms_original) if highlighted_terms_original else 0} highlighted terms for original lyrics")
+                            if highlighted_terms_original:
+                                print(f"     Original terms: {highlighted_terms_original[:5]}")
+                        except Exception as e:
+                            print(f"  ⚠️ Could not generate terms for original lyrics: {e}")
+                            track['highlighted_terms_original'] = []
+                    else:
+                        track['highlighted_terms_original'] = []
+                    
                     if explanation:
                         print(f"  ✅ Generated explanation ({len(explanation)} chars) with {len(highlighted_terms) if highlighted_terms else 0} highlighted terms")
                         if highlighted_terms:
@@ -1457,10 +1656,12 @@ def dj_recommend():
                     traceback.print_exc()
                     track['lyrics_explanation'] = None
                     track['highlighted_terms'] = []
+                    track['highlighted_terms_original'] = []
             else:
                 print(f"  ⚠️ No lyrics available for explanation")
                 track['lyrics_explanation'] = None
                 track['highlighted_terms'] = []
+                track['highlighted_terms_original'] = []
         
         print(f"\n✅ Finished generating explanations for {len(selected_tracks)} tracks")
         
@@ -1474,7 +1675,7 @@ def dj_recommend():
         # Update conversation history
         conversation_history.append({"role": "user", "content": user_message})
         conversation_history.append({"role": "assistant", "content": dj_intro})
-        session['conversation_history'] = conversation_history[-10:]
+        session['conversation_history'] = conversation_history[-6:]  # Keep last 6 messages (optimized for token usage)
         
         # Save messages to database
         user_message_db_id = None

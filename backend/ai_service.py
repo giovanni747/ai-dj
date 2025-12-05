@@ -2,6 +2,7 @@ import os
 from groq import Groq
 from dotenv import load_dotenv
 from pathlib import Path
+from rate_limiter import groq_rate_limiter
 
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(env_path)
@@ -39,28 +40,50 @@ class GroqRecommendationService:
         
         return response.choices[0].message.content
     
-    def get_recommendations(self, user_message, user_profile, conversation_history=None):
+    def get_recommendations(self, user_message, user_profile, conversation_history=None, weather_data=None):
         """Get AI DJ recommendations: returns both intro text and song list"""
+        
+        print(f"🌤️ [WEATHER DEBUG AI] get_recommendations called with weather_data: {weather_data is not None}", flush=True)
+        if weather_data:
+            print(f"🌤️ [WEATHER DEBUG AI] Weather data received: {weather_data}", flush=True)
+        import sys
+        sys.stdout.flush()
         
         # Build conversation history
         messages = []
         
         # System prompt - AI DJ that recommends songs
-        system_prompt = """You are an AI DJ specializing in music recommendations. Your job is to:
+        weather_instruction = ""
+        if weather_data:
+            print(f"🌤️ [WEATHER DEBUG AI] Adding weather instructions to system prompt", flush=True)
+            import sys
+            sys.stdout.flush()
+            weather_instruction = """
+5. Consider the current weather conditions when recommending songs:
+   - Match the mood and energy of the music to the weather
+   - Rainy/cloudy weather → cozy, introspective, or calming songs
+   - Sunny/clear weather → upbeat, energetic, or happy songs
+   - Cold weather → warm, comforting, or nostalgic songs
+   - Hot weather → refreshing, tropical, or breezy songs
+   - Stormy weather → dramatic, intense, or powerful songs
+   - Snow → peaceful, ambient, or winter-themed songs
+   The weather should influence the song selection to create a perfect atmosphere."""
+        
+        system_prompt = f"""You are an AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 8 songs that exist on Spotify (we'll verify these are the best matches)
-4. Provide a brief DJ-style introduction (2-3 sentences)
+3. Recommend exactly 6 songs that exist on Spotify (we'll verify these are the best matches)
+4. Provide a brief DJ-style introduction (2-3 sentences){weather_instruction}
 
 Return your response as a JSON object with this exact structure:
-{
+{{
   "intro": "Your DJ-style introduction here (3-5 sentences, make it longer and more engaging)",
   "songs": [
-    {"title": "Song Title", "artist": "Artist Name"},
-    {"title": "Song Title", "artist": "Artist Name"},
-    ... (exactly 8 songs)
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    ... (exactly 6 songs)
   ]
-}
+}}
 
 IMPORTANT:
 - Only recommend songs that actually exist on Spotify (popular, well-known songs)
@@ -110,6 +133,35 @@ IMPORTANT:
             audio_features_avg = {'energy': 0.5, 'danceability': 0.5, 'valence': 0.5}
             print("⚠️  No audio features available from Spotify API or database - using defaults (0.5)")
         
+        # Build weather context if available
+        weather_info = ""
+        if weather_data:
+            print(f"🌤️ [WEATHER DEBUG AI] Building weather context for prompt", flush=True)
+            import sys
+            sys.stdout.flush()
+            weather_info = f"""
+Current Weather:
+- Location: {weather_data.get('city', 'Unknown')}, {weather_data.get('country', 'Unknown')}
+- Temperature: {weather_data.get('temperature', 'N/A')}°C (feels like {weather_data.get('feels_like', 'N/A')}°C)
+- Condition: {weather_data.get('description', 'N/A').title()} ({weather_data.get('condition', 'N/A')})
+- Humidity: {weather_data.get('humidity', 'N/A')}%
+
+Use this weather information to select songs that match the mood and atmosphere. For example:
+- Rainy/cloudy → cozy, introspective, calming, or melancholic songs
+- Sunny/clear → upbeat, energetic, happy, or uplifting songs
+- Cold → warm, comforting, nostalgic, or intimate songs
+- Hot → refreshing, tropical, breezy, or chill songs
+- Stormy → dramatic, intense, powerful, or emotional songs
+- Snow → peaceful, ambient, winter-themed, or contemplative songs
+"""
+            print(f"🌤️ [WEATHER DEBUG AI] Weather info length: {len(weather_info)} chars", flush=True)
+            import sys
+            sys.stdout.flush()
+        else:
+            print(f"🌤️ [WEATHER DEBUG AI] No weather data, skipping weather context", flush=True)
+            import sys
+            sys.stdout.flush()
+        
         context = f"""User's Music Profile:
 - Genres: {', '.join(user_profile.get('genres', [])[:10]) or 'Various'}
 - Top Artists: {', '.join(top_artists_names) or 'Various'}
@@ -117,10 +169,10 @@ IMPORTANT:
 - Energy Level: {energy_str}
 - Danceability: {danceability_str}
 - Mood (Valence): {valence_str}
-
+{weather_info}
 User's Request: {user_message}
 
-Based on this profile and request, recommend exactly 8 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
+Based on this profile and request, recommend exactly 6 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
         
         messages.append({
             "role": "user",
@@ -152,6 +204,13 @@ Based on this profile and request, recommend exactly 8 songs that match their ta
                 print(f"    - Valence (Mood): {audio_features_avg.get('valence', 0):.2f}")
             else:
                 print(f"    ⚠️  Audio features not available (API may be restricted)")
+            print(f"\n[WEATHER DATA]")
+            if weather_data:
+                print(f"  Location: {weather_data.get('city', 'Unknown')}, {weather_data.get('country', 'Unknown')}")
+                print(f"  Temperature: {weather_data.get('temperature', 'N/A')}°C")
+                print(f"  Condition: {weather_data.get('description', 'N/A')}")
+            else:
+                print(f"  (none)")
             print(f"\n[USER MESSAGE]")
             print(f"  {user_message}")
             print(f"\n[FULL USER CONTEXT SENT TO LLM]")
@@ -166,6 +225,9 @@ Based on this profile and request, recommend exactly 8 songs that match their ta
         try:
             if DEBUG_MODE:
                 print(f"Calling Groq API with model: {self.model}")
+            
+            # Wait for rate limit if needed (estimate 2000 tokens for main recommendation)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=2000)
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -240,9 +302,9 @@ Based on this profile and request, recommend exactly 8 songs that match their ta
         tracks_text = ""
         for i, track in enumerate(tracks_data, 1):
             lyrics = track.get('lyrics', '')
-            # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
-            lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
-            if len(lyrics) > 800:
+            # Truncate lyrics if too long (keep first 600 chars to reduce tokens)
+            lyrics_preview = lyrics[:600] if len(lyrics) > 600 else lyrics
+            if len(lyrics) > 600:
                 lyrics_preview += "\n[... truncated ...]"
             
             tracks_text += f"""
@@ -271,6 +333,10 @@ Return ONLY valid JSON, no other text."""
         try:
             if DEBUG_MODE:
                 print(f"    📊 Batch scoring {len(tracks_data)} tracks")
+            
+            # Wait for rate limit if needed (estimate based on number of tracks)
+            estimated_tokens = len(tracks_data) * 150 + 200  # ~150 tokens per track + prompt
+            groq_rate_limiter.wait_if_needed(estimated_tokens=estimated_tokens)
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -320,9 +386,9 @@ Return ONLY valid JSON, no other text."""
         Returns:
             Score (0-10) or None if error
         """
-        # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
-        lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
-        if len(lyrics) > 800:
+        # Truncate lyrics if too long (keep first 600 chars to reduce tokens)
+        lyrics_preview = lyrics[:600] if len(lyrics) > 600 else lyrics
+        if len(lyrics) > 600:
             lyrics_preview += "\n[... lyrics truncated ...]"
         
         prompt = f"""Rate how well these song lyrics match the user's request on a scale of 0-10.
@@ -375,9 +441,9 @@ Return ONLY a single number from 0-10 (where 10 is a perfect match), nothing els
         Returns:
             Tuple of (explanation string, highlighted_terms list) or (None, None) if error
         """
-        # Truncate lyrics if too long (keep first 800 chars to reduce tokens)
-        lyrics_preview = lyrics[:800] if len(lyrics) > 800 else lyrics
-        if len(lyrics) > 800:
+        # Truncate lyrics if too long (keep first 600 chars to reduce tokens)
+        lyrics_preview = lyrics[:600] if len(lyrics) > 600 else lyrics
+        if len(lyrics) > 600:
             lyrics_preview += "\n[... lyrics truncated ...]"
         
         prompt = f"""Analyze how these song lyrics relate to the user's request and explain why this song is a good match.
@@ -412,6 +478,9 @@ CRITICAL RULES FOR highlighted_terms:
         try:
             if DEBUG_MODE:
                 print(f"    🤖 Generating lyrics explanation for: {track_name}")
+            
+            # Wait for rate limit if needed (estimate 600 tokens for explanation)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=600)
             
             response = self.client.chat.completions.create(
                 model=self.model,

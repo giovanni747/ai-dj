@@ -30,7 +30,8 @@ export interface SpotifyTrack {
   lyrics_original?: string | null; // Original lyrics in original language
   lyrics_language?: string | null; // Detected language code (e.g., "es", "fr", "en")
   lyrics_explanation?: string | null; // LLM explanation of why lyrics match the prompt
-  highlighted_terms?: string[]; // Terms from lyrics that relate to the prompt/preferences
+  highlighted_terms?: string[]; // Terms from English lyrics that relate to the prompt/preferences
+  highlighted_terms_original?: string[]; // Terms from original language lyrics that relate to the prompt/preferences
 }
 
 export interface SpotifyUser {
@@ -69,7 +70,7 @@ export interface Message {
 }
 
 // API Response Types
-export interface APIResponse<T = any> {
+export interface APIResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;

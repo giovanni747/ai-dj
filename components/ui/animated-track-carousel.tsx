@@ -3,7 +3,7 @@
 import { IconArrowLeft, IconArrowRight } from "@tabler/icons-react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { SpotifyTrack } from "@/types";
 import { getAlbumArt } from "@/lib/track-utils";
@@ -25,13 +25,28 @@ export const AnimatedTrackCarousel = ({
   const [expandedExplanations, setExpandedExplanations] = useState<Set<number>>(new Set());
   const [showTranslatedLyrics, setShowTranslatedLyrics] = useState<Map<string, boolean>>(new Map());
 
-  const handleNext = () => {
-    setActive((prev) => (prev + 1) % tracks.length);
-  };
+  // Generate deterministic rotation values based on track ID (pure function)
+  // This creates consistent "random-looking" rotations without using Math.random()
+  const getRotationForTrack = useCallback((trackId: string) => {
+    // Simple hash function to convert track ID to a number between -10 and 10
+    let hash = 0;
+    for (let i = 0; i < trackId.length; i++) {
+      hash = ((hash << 5) - hash) + trackId.charCodeAt(i);
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    // Normalize to -10 to 10 range
+    return ((Math.abs(hash) % 21) - 10);
+  }, []);
 
-  const handlePrev = () => {
+  const trackRotations = tracks.map(track => getRotationForTrack(track.id));
+
+  const handleNext = useCallback(() => {
+    setActive((prev) => (prev + 1) % tracks.length);
+  }, [tracks.length]);
+
+  const handlePrev = useCallback(() => {
     setActive((prev) => (prev - 1 + tracks.length) % tracks.length);
-  };
+  }, [tracks.length]);
 
   const isActive = (index: number) => {
     return index === active;
@@ -42,11 +57,7 @@ export const AnimatedTrackCarousel = ({
       const interval = setInterval(handleNext, 5000);
       return () => clearInterval(interval);
     }
-  }, [autoplay]);
-
-  const randomRotateY = () => {
-    return Math.floor(Math.random() * 21) - 10;
-  };
+  }, [autoplay, handleNext]);
 
   if (!tracks || tracks.length === 0) {
     return null;
@@ -72,13 +83,13 @@ export const AnimatedTrackCarousel = ({
                       opacity: 0,
                       scale: 0.9,
                       z: -100,
-                      rotate: randomRotateY(),
+                      rotate: trackRotations[index],
                     }}
                     animate={{
                       opacity: isActive(index) ? 1 : 0.7,
                       scale: isActive(index) ? 1 : 0.95,
                       z: isActive(index) ? 0 : -100,
-                      rotate: isActive(index) ? 0 : randomRotateY(),
+                      rotate: isActive(index) ? 0 : trackRotations[index],
                       zIndex: isActive(index)
                         ? 999
                         : tracks.length + 2 - index,
@@ -88,7 +99,7 @@ export const AnimatedTrackCarousel = ({
                       opacity: 0,
                       scale: 0.9,
                       z: 100,
-                      rotate: randomRotateY(),
+                      rotate: trackRotations[index],
                     }}
                     transition={{
                       duration: 0.4,
@@ -224,12 +235,22 @@ export const AnimatedTrackCarousel = ({
                         animate={{ opacity: 1 }}
                         transition={{ delay: 0.2 }}
                       >
-                        {highlightLyricsTerms(
-                          (showTranslatedLyrics.get(activeTrack.id) ?? true) && activeTrack.lyrics
+                        {(() => {
+                          const showingTranslated = (showTranslatedLyrics.get(activeTrack.id) ?? true) && activeTrack.lyrics;
+                          const lyricsToShow = showingTranslated
                             ? activeTrack.lyrics
-                            : (activeTrack.lyrics_original || activeTrack.lyrics || ''),
-                          activeTrack.highlighted_terms || []
-                        )}
+                            : (activeTrack.lyrics_original || activeTrack.lyrics || '');
+                          
+                          // Use appropriate highlighted terms based on which lyrics version is showing
+                          const termsToHighlight = showingTranslated
+                            ? (activeTrack.highlighted_terms || [])
+                            : (activeTrack.highlighted_terms_original || activeTrack.highlighted_terms || []);
+                          
+                          return highlightLyricsTerms(
+                            lyricsToShow,
+                            termsToHighlight
+                          );
+                        })()}
                       </motion.p>
                     </div>
                   </div>

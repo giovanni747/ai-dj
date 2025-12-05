@@ -16,7 +16,13 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { message } = body;
+    const { message, tool, location } = body;
+
+    console.log('🌤️ [WEATHER DEBUG API] Received request:', { 
+      message: message?.substring(0, 50), 
+      tool, 
+      location 
+    });
 
     if (!message) {
       return NextResponse.json(
@@ -26,6 +32,12 @@ export async function POST(request: Request) {
     }
 
     // Forward the request to Flask backend with Clerk user ID
+    console.log('🌤️ [WEATHER DEBUG API] Forwarding to Flask backend with:', { 
+      tool, 
+      hasLocation: !!location,
+      location 
+    });
+    
     const response = await fetch('http://127.0.0.1:5001/dj_recommend', {
       method: 'POST',
       headers: {
@@ -33,7 +45,11 @@ export async function POST(request: Request) {
         'Cookie': cookieHeader, // Forward cookies for Spotify session
         'X-Clerk-User-Id': user.id, // Add Clerk user ID header
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ 
+        message, 
+        tool: tool || null,
+        location: location || null
+      }),
     });
 
     const text = await response.text();

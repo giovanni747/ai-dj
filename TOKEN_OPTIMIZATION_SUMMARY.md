@@ -1,147 +1,111 @@
 # Token Usage Optimization Summary
 
-## Overview
-Implemented multiple optimizations to significantly reduce token consumption and API call count while maintaining quality.
+**Date**: December 5, 2025  
+**Token Limit**: 10,000 tokens per request (Groq API)
 
 ## Optimizations Implemented
 
-### 1. ✅ Force JSON Output with `response_format`
-- **Location**: `backend/ai_service.py`
-- **Changes**: 
-  - Added `response_format={"type": "json_object"}` to:
-    - `get_recommendations()` (line 158)
-    - `explain_lyrics_relevance()` (line 315)
-    - `batch_score_lyrics_relevance()` (line 263)
-- **Benefits**:
-  - More reliable JSON parsing (no more markdown code blocks)
-  - Cleaner output (no extra formatting)
-  - Potentially fewer tokens (no markdown syntax overhead)
-  - Eliminates need for complex JSON extraction fallbacks
+### 1. ✅ Lyrics Truncation (Reduced from 800 to 600 characters)
 
-### 2. ✅ Lyrics Truncation (60% Reduction)
-- **Location**: `backend/ai_service.py`
-- **Changes**:
-  - Reduced lyrics preview from **1500 chars → 800 chars** in `score_lyrics_relevance()` (line 307)
-  - Reduced lyrics preview from **2000 chars → 800 chars** in `explain_lyrics_relevance()` (line 270)
-  - Lyrics in batch scoring also use 800 char limit (line 227)
-- **Token Savings**: ~60% reduction per lyrics-related API call
-- **Impact**: 
-  - Each lyrics scoring call: ~470 tokens saved
-  - Each explanation call: ~810 tokens saved
+**Files Modified**: `backend/ai_service.py`
 
-### 3. ✅ Debug Logging Conditional
-- **Location**: `backend/ai_service.py`
-- **Changes**:
-  - Added `DEBUG_MODE` flag (line 10) controlled by `AI_SERVICE_DEBUG` env var
-  - Wrapped verbose debug logging in `if DEBUG_MODE:` blocks
-  - Reduced console output in production
-- **Benefits**:
-  - Cleaner logs in production
-  - Slightly better performance (less I/O)
-  - Easier to enable debug mode when needed: `export AI_SERVICE_DEBUG=true`
+- **`batch_score_lyrics_relevance()`** (Line ~301-304)
+  - Changed: `lyrics[:800]` → `lyrics[:600]`
+  - Impact: ~25% reduction in lyrics tokens per track
+  - Estimated savings: **50-75 tokens per track**
 
-### 4. ✅ Batch Lyrics Scoring
-- **Location**: 
-  - New method in `backend/ai_service.py`: `batch_score_lyrics_relevance()` (line 208)
-  - Updated `backend/main.py` to use batch scoring (line 1105-1123)
-- **Changes**:
-  - Instead of 8 individual API calls to score lyrics, now makes **1 batch API call**
-  - Scores all 8 tracks in a single request
-- **API Call Reduction**: **8 calls → 1 call** (87.5% reduction for lyrics scoring)
-- **Token Savings**: 
-  - Eliminates redundant system prompts (7 fewer)
-  - Single context setup vs. 8 separate setups
-  - Estimated ~30-40% token reduction for lyrics scoring phase
+- **`score_lyrics_relevance()`** (Line ~381-384)
+  - Changed: `lyrics[:800]` → `lyrics[:600]`
+  - Impact: Same as above (deprecated function, but kept for compatibility)
 
-## Token Usage Comparison
+- **`explain_lyrics_relevance()`** (Line ~436-439)
+  - Changed: `lyrics[:800]` → `lyrics[:600]`
+  - Impact: ~25% reduction in explanation prompt size
+  - Estimated savings: **50-75 tokens per track**
 
-### Before Optimization (8 songs)
-```
-1. Initial recommendation request:       ~1,500 tokens
-2. Lyrics scoring (8 individual calls):  ~3,200 tokens (400 × 8)
-3. Lyrics explanations (8 calls):        ~6,400 tokens (800 × 8)
-Total API calls per request: 17
-Total estimated tokens: ~10,500 tokens
-```
+**Total Savings**: If processing 20 tracks for batch scoring + 8 tracks for explanations:
+- Batch scoring: 20 tracks × 50 tokens = **1,000 tokens saved**
+- Explanations: 8 tracks × 50 tokens = **400 tokens saved**
+- **Total: ~1,400 tokens saved per recommendation request**
 
-### After Optimization (8 songs)
-```
-1. Initial recommendation request:       ~1,400 tokens (slightly less with JSON mode)
-2. Lyrics scoring (1 batch call):        ~2,000 tokens (all 8 tracks in one call)
-3. Lyrics explanations (8 calls):        ~3,200 tokens (400 × 8, with 800 char lyrics)
-Total API calls per request: 10
-Total estimated tokens: ~6,600 tokens
-```
+### 2. ✅ Chat History Truncation (Already Implemented)
 
-## Overall Impact
+**Files Verified**: `backend/main.py`
 
-| Metric | Before | After | Savings |
-|--------|--------|-------|---------|
-| **Tokens per request** | ~10,500 | ~6,600 | **37% reduction** |
-| **API calls per request** | 17 | 10 | **41% reduction** |
-| **Lyrics chars processed** | 1500-2000 | 800 | **60% reduction** |
+- Line 902: `session['conversation_history'] = conversation_history[-10:]`
+- Line 1642: `session['conversation_history'] = conversation_history[-10:]`
 
-### Cost Savings
-- **Token cost**: ~$0.000063/request → ~$0.000040/request (assuming $0.000006/token)
-- **Rate limit impact**: 37% fewer tokens = can handle ~60% more requests before hitting rate limits
-- **API call reduction**: 41% fewer calls = faster response times and less rate limit pressure
+**Status**: Already optimized! Chat history is limited to the last 10 messages (5 user + 5 assistant pairs).
 
-## Additional Optimizations Available (Not Yet Implemented)
+**Token Usage**: 
+- Average message: ~50-100 tokens
+- 10 messages: ~500-1,000 tokens
+- This is well within safe limits ✅
 
-### 5. Streaming Responses
-- Use `stream=True` for long LLM responses
-- Could improve perceived performance for user-facing recommendations
-- Not critical since responses are already fast
+### 3. ✅ Spotify Search Results (Already Optimized)
 
-### 6. Caching
-- Cache audio features for tracks
-- Cache lyrics for popular songs
-- Cache LLM responses for similar prompts
-- Would require Redis or similar
+**Files Verified**: `backend/main.py`
 
-### 7. Parallel API Calls
-- Fetch lyrics in parallel (currently sequential)
-- Generate explanations in parallel
-- Would require async/await refactoring
+- Line 1188: `limit=1` (searches return only 1 track per song recommendation)
+- Line 1236: `limit=1` (fallback search also returns 1 track)
 
-## How to Enable Debug Mode
+**Status**: Already optimized! The system searches for exactly 8 songs (from LLM recommendations) and fetches only 1 Spotify result per song.
 
-To see detailed logging during development:
+**Token Impact**: Minimal - Spotify API results are not sent to LLM, only used for track metadata.
 
-```bash
-export AI_SERVICE_DEBUG=true
+## Token Usage Breakdown (After Optimizations)
+
+### Per Recommendation Request:
+
+1. **System Prompt**: ~300 tokens
+2. **User Profile Context**: ~200-300 tokens
+3. **Chat History** (10 messages): ~500-1,000 tokens
+4. **User Message**: ~50-100 tokens
+5. **Weather Data** (if enabled): ~150 tokens
+6. **LLM Response**: ~300-500 tokens
+
+**Subtotal (Main Request)**: ~1,500-2,350 tokens ✅
+
+### Lyrics Processing (Separate Requests):
+
+7. **Batch Lyrics Scoring** (20 tracks × 150 tokens): ~3,000 tokens
+8. **Lyrics Explanations** (8 tracks × 400 tokens): ~3,200 tokens
+
+**Subtotal (Lyrics Processing)**: ~6,200 tokens ✅
+
+### Total Token Usage Per Full Recommendation:
+**~7,700-8,550 tokens** (well within 10,000 limit) ✅
+
+## Safety Margins
+
+- **Before Optimization**: ~9,500-10,500 tokens (risk of hitting limit)
+- **After Optimization**: ~7,700-8,550 tokens (safe margin)
+- **Headroom**: ~1,500-2,300 tokens (15-23% buffer)
+
+## Additional Recommendations (Future)
+
+If you need further optimization:
+
+1. **Reduce Lyrics Further**: 600 → 500 chars (saves another 300-500 tokens)
+2. **Limit Batch Scoring**: Score only top 15 tracks instead of 20 (saves 750 tokens)
+3. **Reduce Chat History**: 10 → 6 messages (saves 200-400 tokens)
+4. **Compress System Prompt**: Remove verbose instructions (saves 100-200 tokens)
+
+## Monitoring
+
+To monitor token usage in production:
+
+```python
+# Add to backend/ai_service.py after each API call
+if response.usage:
+    print(f"Tokens used: {response.usage.total_tokens}")
 ```
 
-To disable (production):
-```bash
-export AI_SERVICE_DEBUG=false
-# or simply unset the variable
-```
+## Conclusion
 
-## Testing
+✅ All three optimizations have been implemented or verified:
+1. Lyrics truncation reduced to 600 chars
+2. Chat history limited to 10 messages (already implemented)
+3. Spotify search results limited to 1 per song (already implemented)
 
-All optimizations have been validated with:
-```bash
-python -m py_compile backend/ai_service.py backend/main.py
-```
-
-No syntax errors detected.
-
-## Next Steps
-
-1. **Monitor performance**: Track actual token usage and API call counts in production
-2. **Consider caching**: If certain tracks or prompts are repeated frequently
-3. **Evaluate batch explanation generation**: Similar to batch scoring, could batch the explanation generation phase
-4. **Fine-tune truncation limits**: 800 chars might be too aggressive for some songs - monitor quality
-
-## Files Modified
-
-- `backend/ai_service.py`: Core optimization logic
-- `backend/main.py`: Updated to use batch scoring
-- `.env`: Add `AI_SERVICE_DEBUG=false` for production
-
----
-
-*Generated: 2025-11-13*
-*Summary: Reduced token usage by 37% and API calls by 41% through JSON mode, lyrics truncation, debug logging control, and batch processing.*
-
+Your application is now optimized for token usage and should stay comfortably within the 10,000 token limit even under heavy load.

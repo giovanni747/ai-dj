@@ -15,14 +15,22 @@ interface TrackListProps {
   likedTracks?: Set<string>;
   onToggleLike?: (trackId: string) => void;
   frequentlyLikedTerms?: Set<string>;
+  onPlaybackChange?: (isPlaying: boolean) => void;
 }
 
-export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike, frequentlyLikedTerms = new Set() }: TrackListProps) {
+export function TrackList({ tracks, className = "", likedTracks = new Set(), onToggleLike, frequentlyLikedTerms = new Set(), onPlaybackChange }: TrackListProps) {
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [expandedTracks, setExpandedTracks] = useState<Set<string>>(new Set());
   const [showTranslatedLyrics, setShowTranslatedLyrics] = useState<Map<string, boolean>>(new Map());
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Notify parent component of playback state changes
+  useEffect(() => {
+    if (onPlaybackChange) {
+      onPlaybackChange(isPlaying);
+    }
+  }, [isPlaying, onPlaybackChange]);
 
   // Stop audio when component unmounts or track changes
   useEffect(() => {

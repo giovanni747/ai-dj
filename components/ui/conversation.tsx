@@ -16,6 +16,7 @@ export const Conversation = forwardRef<HTMLDivElement, ConversationProps>(
     
     return (
       <StickToBottom
+        ref={ref}
         className={cn('relative flex-1 overflow-y-auto no-scrollbar', className)}
         initial="smooth"
         resize="smooth"

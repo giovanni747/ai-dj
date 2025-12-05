@@ -7,13 +7,10 @@ import AILoadingState from "@/components/kokonutui/ai-loading";
 import Loader from "@/components/kokonutui/loader";
 import { TextAnimate } from "@/components/ui/text-animate";
 import { TrackList } from "@/components/ui/track-list";
-import { AnimatedTrackCarousel } from "@/components/ui/animated-track-carousel";
 import type { DJRecommendation, SpotifyTrack } from "@/types";
 import {
   ThumbsDownIcon,
   ThumbsUpIcon,
-  ToggleLeft,
-  ToggleRight,
   X, Volume2, VolumeX,
   Music, Play, Radio, User, FileText, Calendar, MessageSquare, MoreHorizontal, CheckCircle
 } from "lucide-react";
@@ -43,7 +40,6 @@ interface Message {
   tracks?: SpotifyTrack[];
   liked?: boolean;
   disliked?: boolean;
-  switched?: boolean;
   likedTracks?: Set<string>;
 }
 
@@ -67,6 +63,7 @@ export function AIInputWithLoadingDemo({
   const { isSignedIn } = useUser();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
   const [heroImages, setHeroImages] = useState<ImageCard[]>([]);
@@ -243,14 +240,6 @@ export function AIInputWithLoadingDemo({
     }
   };
 
-  const handleSwitch = (messageId: string) => {
-    setMessages(prev => prev.map(msg =>
-      msg.id === messageId
-        ? { ...msg, switched: !msg.switched }
-        : msg
-    ));
-  };
-
   const handleToggleTrackLike = async (messageId: string, trackId: string) => {
     // Find the track details
     const message = messages.find(msg => msg.id === messageId);
@@ -346,6 +335,21 @@ export function AIInputWithLoadingDemo({
       }))
     });
   }, [messages]);
+
+  // Auto-scroll to bottom when messages change or submission state changes
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      const scrollElement = scrollContainerRef.current;
+      
+      // Small delay to ensure content is rendered
+      setTimeout(() => {
+        scrollElement.scrollTo({
+          top: scrollElement.scrollHeight,
+          behavior: 'smooth'
+        });
+      }, 100);
+    }
+  }, [messages, isSubmitting]);
 
   // Load chat history and liked tracks on mount (only when signed in)
   useEffect(() => {
@@ -565,12 +569,37 @@ export function AIInputWithLoadingDemo({
   const hasMessages = messages.length > 0 || isSubmitting;
 
 
-  const simulateResponse = async (message: string) => {
+  const simulateResponse = async (message: string, selectedTool?: string | null) => {
     setIsSubmitting(true);
 
     // Spotify authentication is required - user must be authenticated to use the app
 
     try {
+      // Get user location if weather tool is selected
+      let location: { lat?: number; lon?: number } | null = null;
+      if (selectedTool === 'weather') {
+        try {
+          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            if (!navigator.geolocation) {
+              reject(new Error('Geolocation is not supported by this browser'));
+              return;
+            }
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              timeout: 5000,
+              enableHighAccuracy: false
+            });
+          });
+          location = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+          };
+          console.log('📍 User location obtained:', location);
+        } catch (error) {
+          console.warn('⚠️ Could not get user location, will use default:', error);
+          // Continue without location - backend will use default
+        }
+      }
+
       // Call the Next.js API route which forwards to Flask backend
       const response = await fetch('/api/dj-recommend', {
         method: 'POST',
@@ -578,7 +607,11 @@ export function AIInputWithLoadingDemo({
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ 
+          message, 
+          tool: selectedTool || null,
+          location: location || null
+        }),
       });
 
       if (response.ok) {
@@ -751,7 +784,10 @@ export function AIInputWithLoadingDemo({
 
       {/* Main Chat Area */}
       <div className="flex-1 relative flex flex-col h-full bg-[#0F0F0F] rounded-3xl overflow-hidden shadow-2xl border border-white/5">
-        <WebGLShader className="absolute inset-0 w-full h-full pointer-events-none" />
+        <WebGLShader 
+          className="absolute inset-0 w-full h-full pointer-events-none" 
+          speed={isMusicPlaying ? 0.08 : 0.01}
+        />
         
       {/* Messages container - using Conversation component - fills remaining space */}
       <Conversation
@@ -975,32 +1011,25 @@ export function AIInputWithLoadingDemo({
                           transition={{ duration: 0.4, delay: 0.2 }}
                           className={cn(
                             "w-full rounded-2xl p-4",
-                            msg.switched
-                              ? "bg-transparent"
-                              : "bg-white/5 backdrop-blur-md border border-white/10"
+                            "bg-white/5 backdrop-blur-md border border-white/10"
                           )}
                         >
-                          {!msg.switched && (
-                            <div className="flex items-center justify-between mb-3">
-                              <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
-                                🎵 Your Playlist <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60">{msg.tracks.length}</span>
-                              </h3>
-                            </div>
-                          )}
-                          {msg.switched ? (
-                            <AnimatedTrackCarousel tracks={msg.tracks} />
-                          ) : (
-                            <TrackList
-                              tracks={msg.tracks}
-                              likedTracks={msg.likedTracks || new Set()}
-                              onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
-                              frequentlyLikedTerms={frequentlyLikedTerms}
-                            />
-                          )}
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
+                              🎵 Your Playlist <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60">{msg.tracks.length}</span>
+                            </h3>
+                          </div>
+                          <TrackList
+                            tracks={msg.tracks}
+                            likedTracks={msg.likedTracks || new Set()}
+                            onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
+                            frequentlyLikedTerms={frequentlyLikedTerms}
+                            onPlaybackChange={setIsMusicPlaying}
+                          />
                         </motion.div>
 
-                        {/* Action buttons for assistant messages - like, dislike, and switch */}
-                        <Actions className={cn("mt-2", msg.switched && "mt-1")}>
+                        {/* Action buttons for assistant messages - like, dislike */}
+                        <Actions className="mt-2">
                           <Action
                             label="Like"
                             tooltip="Like this response"
@@ -1016,18 +1045,6 @@ export function AIInputWithLoadingDemo({
                             className={msg.disliked ? "text-red-500" : ""}
                           >
                             <ThumbsDownIcon className="size-4" />
-                          </Action>
-                          <Action
-                            label="Switch"
-                            tooltip="Switch View"
-                            onClick={() => handleSwitch(msg.id)}
-                            className={msg.switched ? "text-blue-500" : ""}
-                          >
-                            {msg.switched ? (
-                              <ToggleRight className="size-4" />
-                            ) : (
-                              <ToggleLeft className="size-4" />
-                            )}
                           </Action>
                         </Actions>
                       </div>

@@ -5,16 +5,31 @@ import * as THREE from "three"
 
 interface WebGLShaderProps {
   className?: string
+  speed?: number
 }
 
-export function WebGLShader({ className }: WebGLShaderProps) {
+export function WebGLShader({ className, speed = 0.01 }: WebGLShaderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const speedRef = useRef(speed)
+
+  useEffect(() => {
+    speedRef.current = speed
+  }, [speed])
+
+  type ShaderUniforms = {
+    resolution: { value: [number, number] }
+    time: { value: number }
+    xScale: { value: number }
+    yScale: { value: number }
+    distortion: { value: number }
+  }
+
   const sceneRef = useRef<{
     scene: THREE.Scene | null
     camera: THREE.OrthographicCamera | null
     renderer: THREE.WebGLRenderer | null
     mesh: THREE.Mesh | null
-    uniforms: any
+    uniforms: ShaderUniforms | null
     animationId: number | null
   }>({
     scene: null,
@@ -111,7 +126,7 @@ export function WebGLShader({ className }: WebGLShaderProps) {
     }
 
     const animate = () => {
-      if (refs.uniforms) refs.uniforms.time.value += 0.01
+      if (refs.uniforms) refs.uniforms.time.value += speedRef.current
       if (refs.renderer && refs.scene && refs.camera) {
         refs.renderer.render(refs.scene, refs.camera)
       }

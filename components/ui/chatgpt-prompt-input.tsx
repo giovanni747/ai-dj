@@ -4,7 +4,7 @@ import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { cn } from "@/lib/utils";
-import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, Search } from "lucide-react";
+import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, Search, Cloud } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useAutoResizeTextarea } from "@/components/hooks/use-auto-resize-textarea";
 import { Typewriter } from "@/components/ui/typewriter";
@@ -62,10 +62,11 @@ const toolsList = [
   { id: 'writeCode', name: 'Write or code', shortName: 'Write', icon: Pencil },
   { id: 'deepResearch', name: 'Run deep research', shortName: 'Deep Search', icon: Globe, extra: '5 left' },
   { id: 'thinkLonger', name: 'Think for longer', shortName: 'Think', icon: Lightbulb },
+  { id: 'weather', name: 'Weather-based music', shortName: 'Weather', icon: Cloud },
 ];
 
 interface ChatGPTPromptInputProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onSubmit'> {
-  onSubmit?: (value: string) => void | Promise<void>;
+  onSubmit?: (value: string, selectedTool?: string | null) => void | Promise<void>;
   loadingDuration?: number;
   submitted?: boolean;
   spotifyConnected?: boolean;
@@ -117,9 +118,11 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     const handleSubmit = async () => {
       if (!value.trim() || submitted) return;
       const messageValue = value;
+      const tool = selectedTool;
       setValue("");
+      setSelectedTool(null);
       adjustHeight(true);
-      await onSubmit?.(messageValue);
+      await onSubmit?.(messageValue, tool);
     };
 
     const hasValue = value.trim().length > 0;
