@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import json
 import requests
+import concurrent.futures
 
 from flask import Flask, session, url_for, redirect, request, jsonify
 from flask_cors import CORS
@@ -260,7 +261,7 @@ English translation:"""
         
         try:
             translation_response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # Updated to current model
+                model="openai/gpt-oss-120b",  # Fast model with 128k context window
                 messages=[{"role": "user", "content": translate_prompt}],
                 temperature=0.3,
                 max_tokens=2000
@@ -1327,14 +1328,14 @@ def dj_recommend():
         
         # Try to fetch audio features for recommended tracks
         # Note: Audio features API may not be available for new apps (deprecated Nov 2024)
-        # But we'll try anyway and gracefully handle errors
+        # Skip audio features fetch if API is restricted (403) - not critical for recommendations
         print(f"\n=== FETCHING AUDIO FEATURES FOR RECOMMENDED TRACKS ===")
         if tracks:
             track_ids = [track['id'] for track in tracks]
             try:
                 # Try to fetch audio features in batches (Spotify limit is 100 per request)
-                audio_features = sp.audio_features(track_ids)
                 print(f"  Attempting to fetch audio features for {len(track_ids)} tracks...")
+                audio_features = sp.audio_features(track_ids)
                 
                 if audio_features and len(audio_features) > 0:
                     # Create a mapping of track_id to audio features
@@ -1360,26 +1361,26 @@ def dj_recommend():
                                 'loudness': features.get('loudness')
                             }
                             features_count += 1
-                            print(f"  ✅ Added audio features for: {track['name']}")
-                        else:
-                            print(f"  ⚠️ No audio features available for: {track['name']}")
-                            track['audio_features'] = None
                     
-                    print(f"  ✅ Successfully fetched audio features for {features_count}/{len(tracks)} tracks")
+                    if features_count > 0:
+                        print(f"  ✅ Successfully fetched audio features for {features_count}/{len(tracks)} tracks")
+                    else:
+                        print(f"  ℹ️  No audio features returned (API may be restricted)")
+                        for track in tracks:
+                            track['audio_features'] = None
                 else:
-                    print(f"  ⚠️ Audio features API returned empty response")
+                    print(f"  ℹ️  Audio features API returned empty response - continuing without audio features")
                     for track in tracks:
                         track['audio_features'] = None
                         
             except Exception as e:
-                # Handle 403 Forbidden (deprecated API) or other errors gracefully
+                # Silently skip audio features if API is restricted or unavailable
                 error_msg = str(e)
-                if '403' in error_msg or 'Forbidden' in error_msg:
-                    print(f"  ℹ️  Audio features API not available (403 Forbidden - likely deprecated for new apps)")
-                    print(f"  ℹ️  Will use database audio profile for similarity scoring")
+                if '403' in error_msg or 'Forbidden' in error_msg or 'HTTP Error' in error_msg:
+                    print(f"  ℹ️  Audio features API is restricted (403) - skipping this step")
+                    print(f"  ℹ️  Will use database audio profile for similarity scoring if available")
                 else:
-                    print(f"  ⚠️  Error fetching audio features: {e}")
-                    print(f"  ℹ️  Will continue without audio features")
+                    print(f"  ℹ️  Audio features unavailable - continuing without them")
                 
                 # Set audio_features to None for all tracks
                 for track in tracks:
@@ -1482,7 +1483,7 @@ def dj_recommend():
         
         # Fetch lyrics for all tracks (should be 6), then batch score
         print(f"\n=== FETCHING LYRICS & BATCH SCORING RELEVANCE ===")
-        print(f"Processing {len(tracks)} tracks (expecting 6)")
+        print(f"Processing {len(tracks)} tracks (expecting 5)")
         
         # First, fetch all lyrics
         tracks_with_lyrics = []
@@ -1531,13 +1532,13 @@ def dj_recommend():
                     track['lyrics'] = None
                     track['lyrics_original'] = None
                     track['lyrics_language'] = None
-                    track['lyrics_score'] = 5  # Default score for no lyrics
+                    track['lyrics_score'] = 3  # Default score for no lyrics (midpoint of 1-5)
             except Exception as e:
                 print(f"  ❌ Error fetching lyrics: {e}")
                 track['lyrics'] = None
                 track['lyrics_original'] = None
                 track['lyrics_language'] = None
-                track['lyrics_score'] = 5  # Default score on error
+                track['lyrics_score'] = 3  # Default score on error (midpoint of 1-5)
         
         # Print summary of non-English tracks
         if non_english_tracks:
@@ -1568,7 +1569,7 @@ def dj_recommend():
             for track in tracks:
                 if track['id'] in scores_by_id:
                     track['lyrics_score'] = scores_by_id[track['id']]
-                    print(f"  📊 {track['name']}: lyrics score {track['lyrics_score']}/10")
+                    print(f"  📊 {track['name']}: lyrics score {track['lyrics_score']}/5")
         
         # Collect all tracks
         tracks_with_scores = tracks
@@ -1581,89 +1582,99 @@ def dj_recommend():
             # Convert to 0-10 scale (invert so higher is better)
             audio_score = (1 - audio_match_score) * 10
             
-            # Get lyrics score (0-10)
-            lyrics_score = track.get('lyrics_score', 0)
+            # Get lyrics score (1-5 scale)
+            lyrics_score_raw = track.get('lyrics_score', 3)  # Default to 3 (midpoint)
+            # Normalize lyrics score to 0-10 scale for combination with audio score
+            lyrics_score = ((lyrics_score_raw - 1) / 4) * 10  # Convert 1-5 to 0-10
             
             # Weighted combination: 40% audio features, 60% lyrics (lyrics is more important for strict selection)
             combined_score = (audio_score * 0.4) + (lyrics_score * 0.6)
             track['combined_score'] = combined_score
             
-            print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score:.1f}, Combined={combined_score:.1f}")
+            print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score_raw}/5 (normalized: {lyrics_score:.1f}), Combined={combined_score:.1f}")
         
         # Sort by combined score (highest first) and take top 6 (safety measure in case we got more than 6)
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
-        selected_tracks = tracks_with_scores[:6]
+        selected_tracks = tracks_with_scores[:5]
         
         print(f"\n✅ Selected top {len(selected_tracks)} tracks based on lyrics + audio features")
         for i, track in enumerate(selected_tracks, 1):
             print(f"  {i}. {track['name']} - Score: {track.get('combined_score', 0):.1f}")
         
-        # Generate explanations only for the final 6 selected tracks
-        print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS ===")
-        print(f"Processing {len(selected_tracks)} tracks for explanations...")
-        for i, track in enumerate(selected_tracks, 1):
-            print(f"\n[{i}/{len(selected_tracks)}] Generating explanation for: {track['name']} by {track['artist']}")
-            if track.get('lyrics'):
-                try:
-                    # Generate explanation from English lyrics
-                    explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
-                        lyrics=track['lyrics'],
-                        track_name=track['name'],
-                        artist_name=track['artist'],
-                        user_prompt=user_message
-                    )
-                    track['lyrics_explanation'] = explanation
-                    track['highlighted_terms'] = highlighted_terms if highlighted_terms else []
-                    
-                    # Debug: Check lyrics data
-                    has_original = bool(track.get('lyrics_original'))
-                    has_translated = bool(track.get('lyrics'))
-                    are_different = track.get('lyrics_original') != track.get('lyrics') if has_original and has_translated else False
-                    print(f"  🔍 Lyrics check: has_original={has_original}, has_translated={has_translated}, are_different={are_different}")
-                    if has_original and has_translated:
-                        print(f"     Original length: {len(track['lyrics_original'])} chars, Translated length: {len(track['lyrics'])} chars")
-                        print(f"     Language: {track.get('lyrics_language', 'unknown')}")
-                    
-                    # If original lyrics exist and are different, generate highlighted terms for them too
-                    if track.get('lyrics_original') and track['lyrics_original'] != track['lyrics']:
-                        print(f"  🌐 Generating highlighted terms for original language lyrics...")
-                        try:
-                            _, highlighted_terms_original = ai_service.explain_lyrics_relevance(
-                                lyrics=track['lyrics_original'],
-                                track_name=track['name'],
-                                artist_name=track['artist'],
-                                user_prompt=user_message
-                            )
-                            track['highlighted_terms_original'] = highlighted_terms_original if highlighted_terms_original else []
-                            print(f"  ✅ Generated {len(highlighted_terms_original) if highlighted_terms_original else 0} highlighted terms for original lyrics")
-                            if highlighted_terms_original:
-                                print(f"     Original terms: {highlighted_terms_original[:5]}")
-                        except Exception as e:
-                            print(f"  ⚠️ Could not generate terms for original lyrics: {e}")
-                            track['highlighted_terms_original'] = []
-                    else:
-                        track['highlighted_terms_original'] = []
-                    
-                    if explanation:
-                        print(f"  ✅ Generated explanation ({len(explanation)} chars) with {len(highlighted_terms) if highlighted_terms else 0} highlighted terms")
-                        if highlighted_terms:
-                            print(f"     Highlighted terms: {highlighted_terms[:5]}")
-                    else:
-                        print(f"  ⚠️ Failed to generate explanation (returned None)")
-                except Exception as e:
-                    print(f"  ❌ Error generating explanation: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    track['lyrics_explanation'] = None
-                    track['highlighted_terms'] = []
-                    track['highlighted_terms_original'] = []
-            else:
-                print(f"  ⚠️ No lyrics available for explanation")
-                track['lyrics_explanation'] = None
-                track['highlighted_terms'] = []
-                track['highlighted_terms_original'] = []
+        # Generate explanations only for the final 5 selected tracks (PARALLEL)
+        print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS (PARALLEL) ===")
+        print(f"Processing {len(selected_tracks)} tracks for explanations in parallel...")
         
-        print(f"\n✅ Finished generating explanations for {len(selected_tracks)} tracks")
+        def generate_track_explanation(track_data):
+            """Helper function to generate explanation for a single track in parallel"""
+            track, user_message, ai_service = track_data
+            track_id = track['id']
+            track_name = track['name']
+            
+            result = {
+                'track_id': track_id,
+                'explanation': None,
+                'highlighted_terms': [],
+                'highlighted_terms_original': [],
+                'error': None
+            }
+            
+            if not track.get('lyrics'):
+                print(f"  ⚠️ {track_name}: No lyrics available")
+                return result
+            
+            try:
+                # Generate explanation from English lyrics
+                explanation, highlighted_terms = ai_service.explain_lyrics_relevance(
+                    lyrics=track['lyrics'],
+                    track_name=track_name,
+                    artist_name=track['artist'],
+                    user_prompt=user_message
+                )
+                result['explanation'] = explanation
+                result['highlighted_terms'] = highlighted_terms if highlighted_terms else []
+                
+                # If original lyrics exist and are different, generate highlighted terms for them too
+                if track.get('lyrics_original') and track['lyrics_original'] != track['lyrics']:
+                    try:
+                        _, highlighted_terms_original = ai_service.explain_lyrics_relevance(
+                            lyrics=track['lyrics_original'],
+                            track_name=track_name,
+                            artist_name=track['artist'],
+                            user_prompt=user_message
+                        )
+                        result['highlighted_terms_original'] = highlighted_terms_original if highlighted_terms_original else []
+                    except Exception as e:
+                        print(f"  ⚠️ {track_name}: Could not generate terms for original lyrics: {e}")
+                        result['highlighted_terms_original'] = []
+                
+                if explanation:
+                    print(f"  ✅ {track_name}: Generated explanation ({len(explanation)} chars) with {len(result['highlighted_terms'])} terms")
+                else:
+                    print(f"  ⚠️ {track_name}: Explanation returned None")
+                    
+            except Exception as e:
+                print(f"  ❌ {track_name}: Error generating explanation: {e}")
+                result['error'] = str(e)
+            
+            return result
+        
+        # Execute all explanations in parallel using ThreadPoolExecutor
+        track_data_list = [(track, user_message, ai_service) for track in selected_tracks]
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Submit all tasks and get results
+            results = list(executor.map(generate_track_explanation, track_data_list))
+        
+        # Apply results back to tracks
+        for result in results:
+            track = next((t for t in selected_tracks if t['id'] == result['track_id']), None)
+            if track:
+                track['lyrics_explanation'] = result['explanation']
+                track['highlighted_terms'] = result['highlighted_terms']
+                track['highlighted_terms_original'] = result['highlighted_terms_original']
+        
+        print(f"\n✅ Finished generating explanations for {len(selected_tracks)} tracks in parallel")
         
         # Update positions for final tracks
         for i, track in enumerate(selected_tracks, 1):

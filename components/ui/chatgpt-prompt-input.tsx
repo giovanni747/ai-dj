@@ -4,7 +4,7 @@ import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { cn } from "@/lib/utils";
-import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, Search, Cloud } from "lucide-react";
+import { CornerRightUp, Settings2, X, Globe, Pencil, Sparkles, Lightbulb, Search, Cloud } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useAutoResizeTextarea } from "@/components/hooks/use-auto-resize-textarea";
 import { Typewriter } from "@/components/ui/typewriter";
@@ -293,22 +293,6 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                     </svg>
                   </div>
                 )}
-
-                {/* Mic button */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10 focus-visible:outline-none"
-                    >
-                      <Mic className="h-5 w-5" />
-                      <span className="sr-only">Record voice</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" showArrow={true}>
-                    <p>Record voice</p>
-                  </TooltipContent>
-                </Tooltip>
 
                 {/* Send button */}
                 <Tooltip>
