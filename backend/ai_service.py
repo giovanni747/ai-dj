@@ -13,7 +13,7 @@ DEBUG_MODE = os.getenv("AI_SERVICE_DEBUG", "false").lower() == "true"
 class GroqRecommendationService:
     def __init__(self):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        # Use the specified model (note: verify this model exists in Groq)
+        # Use the specified model (llama-3.3-70b-versatile recommended for complex JSON tasks)
         self.model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         
     def analyze_profile(self, user_data):
@@ -72,7 +72,7 @@ class GroqRecommendationService:
         system_prompt = f"""You are an AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 6 songs that exist on Spotify (we'll verify these are the best matches)
+3. Recommend exactly 5 songs that exist on Spotify (we'll verify these are the best matches)
 4. Provide a brief DJ-style introduction (2-3 sentences){weather_instruction}
 
 Return your response as a JSON object with this exact structure:
@@ -81,7 +81,7 @@ Return your response as a JSON object with this exact structure:
   "songs": [
     {{"title": "Song Title", "artist": "Artist Name"}},
     {{"title": "Song Title", "artist": "Artist Name"}},
-    ... (exactly 6 songs)
+    ... (exactly 5 songs)
   ]
 }}
 
@@ -172,7 +172,7 @@ Use this weather information to select songs that match the mood and atmosphere.
 {weather_info}
 User's Request: {user_message}
 
-Based on this profile and request, recommend exactly 6 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
+Based on this profile and request, recommend exactly 5 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
         
         messages.append({
             "role": "user",
@@ -229,13 +229,27 @@ Based on this profile and request, recommend exactly 6 songs that match their ta
             # Wait for rate limit if needed (estimate 2000 tokens for main recommendation)
             groq_rate_limiter.wait_if_needed(estimated_tokens=2000)
             
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.8,
-                max_tokens=1500,  # Increased for JSON response
-                response_format={"type": "json_object"}  # Force JSON output
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.8,
+                    max_tokens=1500,  # Increased for JSON response
+                    response_format={"type": "json_object"}  # Force JSON output
+                )
+            except Exception as e:
+                error_str = str(e)
+                # If strict JSON validation fails, retry without it (some models struggle with it)
+                if "json_validate_failed" in error_str or "400" in error_str:
+                    print(f"⚠️ JSON validation failed with strict mode. Retrying without response_format...")
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=0.8,
+                        max_tokens=1500
+                    )
+                else:
+                    raise e
             
             content = response.choices[0].message.content
             if DEBUG_MODE:
@@ -314,7 +328,7 @@ Lyrics:
 
 """
         
-        prompt = f"""Rate how well each song's lyrics match the user's request on a scale of 0-10.
+        prompt = f"""Rate how well each song's lyrics match the user's request on a scale of 1-5 (where 1 = poor match, 3 = decent match, 5 = perfect match).
 
 User's Request: "{user_prompt}"
 
@@ -325,7 +339,7 @@ Consider for each track:
 - The relevance of the lyrical content to what they're looking for
 - The overall match quality
 
-Return your response as a JSON object with track numbers as keys and scores as values:
+Return your response as a JSON object with track numbers as keys and scores as values (1-5):
 {{"1": score, "2": score, "3": score, ...}}
 
 Return ONLY valid JSON, no other text."""
@@ -357,11 +371,11 @@ Return ONLY valid JSON, no other text."""
                 score_key = str(i)
                 if score_key in scores_by_index:
                     score = int(scores_by_index[score_key])
-                    # Clamp to 0-10
-                    score = max(0, min(10, score))
+                    # Clamp to 1-5
+                    score = max(1, min(5, score))
                     scores_by_id[track['track_id']] = score
                 else:
-                    scores_by_id[track['track_id']] = 5  # Default if missing
+                    scores_by_id[track['track_id']] = 3  # Default if missing (midpoint of 1-5)
             
             if DEBUG_MODE:
                 print(f"    ✅ Batch scored {len(scores_by_id)} tracks")
@@ -369,8 +383,8 @@ Return ONLY valid JSON, no other text."""
             return scores_by_id
         except Exception as e:
             print(f"    ❌ Error in batch scoring: {e}")
-            # Fallback: return default scores
-            return {track['track_id']: 5 for track in tracks_data}
+            # Fallback: return default scores (midpoint of 1-5)
+            return {track['track_id']: 3 for track in tracks_data}
 
     def score_lyrics_relevance(self, lyrics, track_name, artist_name, user_prompt):
         """
@@ -405,7 +419,7 @@ Consider:
 - The relevance of the lyrical content to what they're looking for
 - The overall match quality
 
-Return ONLY a single number from 0-10 (where 10 is a perfect match), nothing else."""
+Return ONLY a single number from 1-5 (where 1 = poor match, 3 = decent match, 5 = perfect match), nothing else."""
 
         try:
             response = self.client.chat.completions.create(
@@ -420,13 +434,13 @@ Return ONLY a single number from 0-10 (where 10 is a perfect match), nothing els
             score_match = re.search(r'\d+', score_text)
             if score_match:
                 score = int(score_match.group())
-                # Clamp to 0-10
-                score = max(0, min(10, score))
+                # Clamp to 1-5
+                score = max(1, min(5, score))
                 return score
-            return 5  # Default score if parsing fails
+            return 3  # Default score if parsing fails (midpoint of 1-5)
         except Exception as e:
             print(f"    ❌ Error scoring lyrics: {e}")
-            return 5  # Default score on error
+            return 3  # Default score on error (midpoint of 1-5)
     
     def explain_lyrics_relevance(self, lyrics, track_name, artist_name, user_prompt):
         """
@@ -479,14 +493,14 @@ CRITICAL RULES FOR highlighted_terms:
             if DEBUG_MODE:
                 print(f"    🤖 Generating lyrics explanation for: {track_name}")
             
-            # Wait for rate limit if needed (estimate 600 tokens for explanation)
-            groq_rate_limiter.wait_if_needed(estimated_tokens=600)
+            # Wait for rate limit if needed (estimate 510 tokens for explanation - reduced by 30%)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=510)
             
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=400,
+                max_tokens=280,  # Reduced by 30% from 400 to save tokens
                 response_format={"type": "json_object"}  # Force JSON output
             )
             response_text = response.choices[0].message.content.strip()

@@ -32,6 +32,7 @@ export interface SpotifyTrack {
   lyrics_explanation?: string | null; // LLM explanation of why lyrics match the prompt
   highlighted_terms?: string[]; // Terms from English lyrics that relate to the prompt/preferences
   highlighted_terms_original?: string[]; // Terms from original language lyrics that relate to the prompt/preferences
+  lyrics_score?: number; // Lyrics relevance score (1-5 scale, where 5 is perfect match)
 }
 
 export interface SpotifyUser {

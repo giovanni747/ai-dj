@@ -417,22 +417,6 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                   </div>
                 )}
 
-                {/* Mic button */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-white transition-colors hover:bg-white/10 focus-visible:outline-none"
-                    >
-                      <Mic className="h-5 w-5" />
-                      <span className="sr-only">Record voice</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" showArrow={true}>
-                    <p>Record voice</p>
-                  </TooltipContent>
-                </Tooltip>
-
                 {/* Send button */}
                 <Tooltip>
                   <TooltipTrigger asChild>

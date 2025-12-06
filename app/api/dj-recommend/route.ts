@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     });
 
     const text = await response.text();
-    let data: any = null;
+    let data: unknown = null;
     try { data = text ? JSON.parse(text) : null; } catch {}
 
     if (response.ok) {
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       data ?? { error: text || 'Failed to get recommendations' },
       { status: response.status }
     );
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: 'Failed to connect to backend' },
       { status: 500 }

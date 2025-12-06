@@ -2,7 +2,7 @@
 
 import { ChatGPTPromptInput } from "@/components/ui/chatgpt-prompt-input";
 import { useState, useEffect, Fragment, useRef, useMemo, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import AILoadingState from "@/components/kokonutui/ai-loading";
 import Loader from "@/components/kokonutui/loader";
 import { TextAnimate } from "@/components/ui/text-animate";
@@ -11,8 +11,7 @@ import type { DJRecommendation, SpotifyTrack } from "@/types";
 import {
   ThumbsDownIcon,
   ThumbsUpIcon,
-  X, Volume2, VolumeX,
-  Music, Play, Radio, User, FileText, Calendar, MessageSquare, MoreHorizontal, CheckCircle
+  Volume2, VolumeX
 } from "lucide-react";
 import { useTextToSpeech } from "@/components/hooks/use-text-to-speech";
 import { Action, Actions } from "@/components/ui/actions";
@@ -27,6 +26,8 @@ import { WebGLShader } from "@/components/ui/web-gl-shader";
 import { useUser } from "@clerk/nextjs";
 import { ImageCarouselHero, type ImageCard } from "@/components/ui/image-carousel-hero";
 import { MorphicNavbar } from "@/components/kokonutui/morphic-navbar";
+import { RadialIntro, type OrbitItem } from "@/components/ui/radial-intro";
+import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
 
 const DynamicRiveAvatar = dynamic(
   () => import("./dj-rive-avatar").then((m) => m.DjRiveAvatar),
@@ -58,6 +59,18 @@ const scenarios = [
   { title: "Party Mix", description: "Upbeat dance floor fillers" },
 ];
 
+// Default artists for the radial intro
+const DEFAULT_ARTISTS: OrbitItem[] = [
+  { id: 1, name: 'The Weeknd', src: 'https://media.glamour.com/photos/5ff5b1f8e28e18c5c7f5372f/master/w_2560%2Cc_limit/the-weeknd.png' },
+  { id: 2, name: 'Drake', src: 'https://i.scdn.co/image/ab6761610000e5eb4293385d324db8558179afd9' },
+  { id: 3, name: 'Taylor Swift', src: 'https://i.scdn.co/image/ab6761610000e5eb5a00969a4698c3132a15fbb0' },
+  { id: 4, name: 'Bad Bunny', src: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRf2rttn1IRczYAq6OMlwP1w8ogk0Yt8gWRHg&s' },
+  { id: 5, name: 'Dua Lipa', src: 'https://www.corazon.cl/wp-content/uploads/2015/02/planb_conciertonuevayork.jpg' },
+  { id: 6, name: 'Kendrick Lamar', src: 'https://i.scdn.co/image/ab6761610000e5eb437b9e2a82505b3d93ff1022' },
+  { id: 7, name: 'Ariana Grande', src: 'https://www.billboard.com/wp-content/uploads/2022/08/Ariana-Grande-the-voice-2021-billboard-1548.jpg?w=875&h=583&crop=1' },
+  { id: 8, name: 'Beyonce', src: 'https://yt3.googleusercontent.com/DFAj5Pcujo1P0iXe8x4XoZwwItN9cbHnDxbdamvhqSTzXTmyNlqsE1HN2bEQN5vpXE6SB1IAoCM=s900-c-k-c0x00ffffff-no-rj' },
+];
+
 export function AIInputWithLoadingDemo({
   spotifyConnected = false
 }: AIInputWithLoadingDemoProps) {
@@ -68,14 +81,8 @@ export function AIInputWithLoadingDemo({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
   const [heroImages, setHeroImages] = useState<ImageCard[]>([]);
-  const [isTyping, setIsTyping] = useState(false);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
   // Manage bubble visibility
-  const [bubbleVisible, setBubbleVisible] = useState(false);
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
-  // Manage bubble visibility and expansion
-  const [isBubbleExpanded, setIsBubbleExpanded] = useState(false);
 
   // Track if history has been loaded to prevent overwriting new messages
   const historyLoadedRef = useRef(false);
@@ -135,17 +142,17 @@ export function AIInputWithLoadingDemo({
         });
         
         if (response.ok) {
-          const data = await response.json();
+          const data = await response.json() as { top_artists?: Array<{ name: string; images?: Array<{ url: string }> }> };
           if (data.top_artists) {
             const images: ImageCard[] = data.top_artists
-              .filter((artist: any) => artist.images && artist.images.length > 0)
-              .map((artist: any, index: number) => ({
+              .filter((artist) => artist.images && artist.images.length > 0)
+              .map((artist, index: number) => ({
                 id: `artist-${index}`,
-                src: artist.images[0].url,
+                src: artist.images![0].url,
                 alt: artist.name,
                 rotation: (index * 10) - 10 // Slight rotation variation
               }))
-              .slice(0, 6); // Take top 6
+              .slice(0, 8); // Take top 8 to match default artist count
             
             if (images.length > 0) {
               setHeroImages(images);
@@ -345,6 +352,7 @@ export function AIInputWithLoadingDemo({
   }, [messages]);
 
   // Auto-scroll to bottom when messages change or submission state changes
+  /*
   useEffect(() => {
     if (scrollContainerRef.current) {
       const scrollElement = scrollContainerRef.current;
@@ -358,6 +366,20 @@ export function AIInputWithLoadingDemo({
       }, 100);
     }
   }, [messages, isSubmitting]);
+  */
+
+  // Clear messages and reset state when user signs out
+  useEffect(() => {
+    if (!isSignedIn) {
+      console.log('User signed out - clearing state');
+      setMessages([]);
+      setFrequentlyLikedTerms(new Set());
+      setHeroImages([]);
+      historyLoadedRef.current = false;
+      hasNewMessagesRef.current = false;
+      setIsLoadingHistory(false);
+    }
+  }, [isSignedIn]);
 
   // Load chat history and liked tracks on mount (only when signed in)
   useEffect(() => {
@@ -549,32 +571,42 @@ export function AIInputWithLoadingDemo({
     // If we have a new message (different ID)
     if (messageId && messageId !== lastMessageId) {
       setLastMessageId(messageId);
-      setBubbleVisible(true);
-      setIsBubbleExpanded(false); // Reset to dot for new message
 
       // Speak the message only if we have content
       if (messageContent) {
         speak(messageContent);
       }
-
-      const timer = setTimeout(() => {
-        setBubbleVisible(false);
-      }, 30000);
-
-      return () => clearTimeout(timer);
     } 
     // If message was removed (no latest message)
     else if (!latestAssistantMessage && lastMessageId) {
-      setBubbleVisible(false);
       setLastMessageId(null);
       cancel();
     }
     // If we have the same message ID, don't do anything (prevent flashing)
     // The bubble should already be visible from the previous render
-  }, [latestAssistantMessage?.id, lastMessageId, speak, cancel]);
+  }, [latestAssistantMessage, lastMessageId, speak, cancel]);
 
   // Compute hasMessages (used in multiple places)
   const hasMessages = messages.length > 0 || isSubmitting;
+
+  // Compute orbit items for radial intro - merge user artists with defaults
+  const orbitItems: OrbitItem[] = useMemo(() => {
+    const userArtists: OrbitItem[] = heroImages.map(img => ({ 
+      id: img.id, 
+      name: img.alt, 
+      src: img.src 
+    }));
+    
+    // If user has artists, use them and fill remaining slots with defaults
+    if (userArtists.length > 0) {
+      const neededCount = DEFAULT_ARTISTS.length;
+      const defaultArtistsToUse = DEFAULT_ARTISTS.slice(userArtists.length);
+      return [...userArtists, ...defaultArtistsToUse].slice(0, neededCount);
+    }
+    
+    // If no user artists, use all defaults
+    return DEFAULT_ARTISTS;
+  }, [heroImages]);
 
 
   const simulateResponse = async (message: string, selectedTool?: string | null) => {
@@ -757,7 +789,10 @@ export function AIInputWithLoadingDemo({
         </div>
 
         {/* Avatar Card at Bottom */}
-        <div className="relative h-[300px] shrink-0 bg-[#F3E2A0] rounded-[32px] p-4 flex flex-col items-center justify-center shadow-xl overflow-visible group">
+        <div className={cn(
+          "relative h-[300px] shrink-0 rounded-[32px] p-4 flex flex-col items-center justify-center shadow-xl overflow-visible group transition-colors duration-500",
+          isSpeaking ? "bg-[#F3E2A0]" : "bg-[#0F0F0F] border border-white/5"
+        )}>
           {/* Mute Toggle Button - Absolute Top Right of Card */}
           <button
             onClick={(e) => {
@@ -765,14 +800,20 @@ export function AIInputWithLoadingDemo({
               toggleMute();
             }}
             className={cn(
-              "absolute top-4 right-4 p-2 rounded-full bg-black/5 hover:bg-black/10 text-black transition-all z-40",
+              "absolute top-4 right-4 p-2 rounded-full transition-all z-40",
+              isSpeaking 
+                ? "bg-black/5 hover:bg-black/10 text-black" 
+                : "bg-white/5 hover:bg-white/10 text-white",
               isMuted ? "opacity-50" : "opacity-100"
             )}
           >
             {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
 
-          <div className="text-black/40 text-[10px] font-bold tracking-widest absolute top-4 left-4">AI DJ</div>
+          <div className={cn(
+            "text-[10px] font-bold tracking-widest absolute top-4 left-4 transition-colors duration-500",
+            isSpeaking ? "text-black/40" : "text-white/40"
+          )}>AI DJ</div>
           
           {/* Avatar Container - Centered & No Glass Background */}
           <div className="w-full flex justify-center items-center z-10">
@@ -781,7 +822,7 @@ export function AIInputWithLoadingDemo({
                 size={440}
                 src="/dj_avatar.riv"
                 stateMachine="State Machine 1"
-                isTyping={isTyping}
+                isTyping={false}
                 className="bg-transparent border-none backdrop-blur-none"
                 containerSize={280}
               />
@@ -807,7 +848,7 @@ export function AIInputWithLoadingDemo({
       {/* Messages container - using Conversation component - fills remaining space */}
       <Conversation
         ref={scrollContainerRef}
-          className="absolute inset-0 no-scrollbar overflow-y-auto z-0 snap-y snap-mandatory"
+          className="absolute inset-0 no-scrollbar overflow-y-auto z-0"
         style={{
           overscrollBehavior: 'none', // Prevent overscroll bounce
           scrollBehavior: 'smooth',
@@ -823,107 +864,23 @@ export function AIInputWithLoadingDemo({
               blurAmount="12px"
           />
         )}
-          <ConversationContent className={hasMessages ? "pt-20 pb-40" : "pt-[10vh] pb-20 flex flex-col justify-start min-h-full"}>
+          <ConversationContent className={hasMessages ? "pt-20 pb-32" : "pt-[10vh] pb-20 flex flex-col justify-start min-h-full"}>
           <div className={cn(
               "max-w-4xl w-full mx-auto flex flex-col gap-8 px-4 md:px-12",
             (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
           )}>
             {messages.length === 0 && !isSubmitting && (
-                <div className="w-full flex flex-col items-center gap-8 animate-in fade-in zoom-in duration-700 origin-center">
-                  {/* Header */}
-                  <div className="text-center space-y-3 mt-0">
-                    <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
-                      Hi, there <span className="animate-wave inline-block">👋</span>
-                    </h1>
-                    <p className="text-base text-white/60 max-w-md mx-auto">
-                      Tell me what you want to hear, and I&apos;ll handle the mix.
-                    </p>
-                  </div>
-
-                  {/* Cards Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-4xl">
-                    {/* Card 1: Dark Accent */}
-                    <div className="group relative p-6 rounded-3xl bg-black/40 border border-white/10 backdrop-blur-md hover:bg-black/60 transition-all cursor-pointer overflow-hidden">
-                      <div className="absolute top-0 right-0 p-4">
-                        <span className="px-3 py-1 rounded-full bg-blue-500 text-[10px] font-semibold text-white">Beta</span>
-                      </div>
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white">
-                          <User size={16} />
-                        </div>
-                        <span className="text-sm font-medium text-white">AI DJ</span>
-                      </div>
-                      <p className="text-white/80 text-sm leading-relaxed mb-4">
-                        Designed to analyze your mood and curate the perfect playlist for any moment.
-                      </p>
-                      <div className="absolute bottom-0 left-0 w-full h-1 bg-linear-to-r from-blue-500 to-purple-500 opacity-50" />
-                    </div>
-
-                    {/* Card 2: List */}
-                    <div className="p-6 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-md hover:bg-white/10 transition-all cursor-pointer">
-                      <div className="space-y-4">
-                        <button 
-                          onClick={() => simulateResponse("Create a workout mix")}
-                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
-                        >
-                          <FileText size={16} className="text-blue-400 shrink-0" />
-                          <span>Create a workout mix</span>
-                        </button>
-                        <button 
-                          onClick={() => simulateResponse("Help me discover new artists")}
-                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
-                        >
-                          <Radio size={16} className="text-purple-400 shrink-0" />
-                          <span>Discover new artists</span>
-                        </button>
-                        <button 
-                          onClick={() => simulateResponse("Explain the lyrics of the current song")}
-                          className="flex w-full items-center gap-3 text-sm text-white/80 hover:text-white transition-colors text-left"
-                        >
-                          <MessageSquare size={16} className="text-green-400 shrink-0" />
-                          <span>Explain these lyrics</span>
-                        </button>
-                      </div>
-                      <div className="mt-6 flex justify-between items-center">
-                        <span className="text-xs text-white/40">Suggested Actions</span>
-                        <span className="text-xs text-blue-400 hover:underline">View All</span>
-                      </div>
-                    </div>
-
-                    {/* Card 3: Prompt */}
-                    <button 
-                      onClick={() => simulateResponse("Play some upbeat pop for a road trip with friends")}
-                      className="relative p-6 rounded-3xl bg-white/5 border border-white/10 backdrop-blur-md hover:bg-white/10 transition-all cursor-pointer group text-left w-full"
-                    >
-                      <div className="absolute top-4 right-4">
-                        <MoreHorizontal size={16} className="text-white/40" />
-                      </div>
-                      <h3 className="text-sm font-medium text-white mb-2">Try this prompt</h3>
-                      <p className="text-lg font-medium text-white/90 leading-snug mb-4 group-hover:text-blue-300 transition-colors">
-                        &quot;Play some upbeat pop for a road trip with friends&quot;
-                      </p>
-                      <div className="text-xs text-white/40">Click to send</div>
-                    </button>
-                  </div>
-
-                  {/* Pill Buttons */}
-                  <div className="flex flex-wrap justify-center gap-3 w-full mt-4">
-                    {[
-                      { icon: Calendar, label: "Recent Mixes", action: () => simulateResponse("Show my recent mixes") },
-                      { icon: Play, label: "Start Radio", action: () => simulateResponse("Start a radio station based on my taste") },
-                      { icon: CheckCircle, label: "Connect Spotify", action: handleSpotifyConnect },
-                      { icon: Music, label: "Browse Genres", action: () => simulateResponse("Browse music genres") }
-                    ].map((item, i) => (
-                      <button 
-                        key={i}
-                        onClick={item.action}
-                        className="flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:scale-105 transition-all text-sm text-white/80 hover:text-white backdrop-blur-md"
-                      >
-                        <item.icon size={14} className="opacity-70" />
-                        <span>{item.label}</span>
-                      </button>
-                    ))}
-                  </div>
+              <div className="w-full h-full flex items-center justify-center">
+                <RadialIntro 
+                  orbitItems={orbitItems}
+                  stageSize={470}
+                  centerContent={
+                    <HandWrittenTitle 
+                      title={<>Hi, there <span className="animate-wave inline-block">👋</span></>}
+                      subtitle="Tell me what you want to hear, and I'll handle the mix."
+                    />
+                  }
+                />
               </div>
             )}
 
@@ -945,7 +902,6 @@ export function AIInputWithLoadingDemo({
 
               // Show assistant messages with content (intro text)
               // Always show the content in the chat, not hidden for bubble
-              const isLatestAssistantMessage = msg.id === latestAssistantMessage?.id;
 
               if (msg.role === "assistant" && msg.content && (!msg.tracks || msg.tracks.length === 0)) {
                 return (

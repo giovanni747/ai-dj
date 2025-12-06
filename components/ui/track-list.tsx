@@ -6,6 +6,8 @@ import type { SpotifyTrack } from "@/types";
 import { formatDuration, getAlbumArt } from "@/lib/track-utils";
 import { cn } from "@/lib/utils";
 import { ExternalLink, Play, Pause, Music, Heart, ChevronDown, ChevronUp, FileText } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { BlurredStagger } from "@/components/ui/blurred-stagger-text";
 import { highlightLyricsTerms } from "@/lib/lyrics-highlight";
 import { Button } from "@/components/ui/button";
 
@@ -219,6 +221,23 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                 <p className="text-sm font-medium text-white truncate">
                   {track.name}
                 </p>
+                {track.lyrics_score && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help ml-2">
+                          <BlurredStagger 
+                            text={`${track.lyrics_score}/5`}
+                            className="text-sm font-bold text-[#F3E2A0]"
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Match Score: How well this song matches your request (1-5)</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
                 {track.popularity >= 70 && (
                   <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">
                     Popular

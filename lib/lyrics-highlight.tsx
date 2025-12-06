@@ -30,23 +30,32 @@ export function highlightLyricsTerms(
   }
   
   // Create a regex pattern that matches any of the terms (case-insensitive)
-  // Escape special regex characters in terms, but preserve spaces
-  const escapedTerms = sortedTerms.map(term => {
-    // Preserve the original term but escape regex special chars
-    return term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  });
-  
-  // Build pattern: match terms as they appear in lyrics
-  // Use non-word-boundary approach for more flexible matching
-  const patternParts = escapedTerms.map(term => {
-    // Escape the term for regex
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // For single words, try with word boundaries first, but also allow partial matches
-    if (term.trim().split(/\s+/).length === 1) {
-      // Match as whole word, but be flexible with surrounding characters
-      return `\\b${escaped}\\b`;
+  // Build pattern: match terms as they appear in lyrics with flexibility for quotes and spacing
+  const patternParts = sortedTerms.map(term => {
+    // 1. Escape special regex characters
+    // Note: We don't escape quotes here as we handle them specifically below
+    let escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // 2. Allow flexibility for whitespace (match newlines or multiple spaces)
+    escaped = escaped.replace(/\s+/g, '[\\s\\n]+');
+    
+    // 3. Allow flexibility for quotes (straight vs curly)
+    escaped = escaped.replace(/['’]/g, "['’]");
+    
+    // 4. Handle word boundaries
+    // Only enforce word boundaries if the term starts/ends with a word character
+    const isSingleWord = term.trim().split(/\s+/).length === 1;
+    
+    if (isSingleWord) {
+      const startsWithWordChar = /^\w/.test(term.trim());
+      const endsWithWordChar = /\w$/.test(term.trim());
+      
+      const startBoundary = startsWithWordChar ? '\\b' : '';
+      const endBoundary = endsWithWordChar ? '\\b' : '';
+      
+      return `${startBoundary}${escaped}${endBoundary}`;
     }
-    // For phrases, match exactly as written (preserving spaces)
+    
     return escaped;
   });
   
@@ -74,8 +83,10 @@ export function highlightLyricsTerms(
     const matchedTextLower = matchedText.toLowerCase().trim();
     const isFrequentlyLiked = frequentlyLikedTerms.has(matchedTextLower);
     
-    // Use red color (#ef4444) for frequently liked terms, cyan (#22d3ee) for others
-    const highlightColor = isFrequentlyLiked ? "#ef4444" : "#22d3ee";
+    // Use red color (#ef4444) for frequently liked terms, yellowish (#F3E2A0) for others to match avatar theme
+    const highlightColor = isFrequentlyLiked ? "#ef4444" : "#F3E2A0";
+    // Use white text for dark backgrounds (red), black text for light backgrounds (yellow)
+    const textColor = isFrequentlyLiked ? "text-white" : "text-black font-medium";
     
     parts.push(
       <Highlighter
@@ -89,7 +100,7 @@ export function highlightLyricsTerms(
         multiline={true}
         isView={false}
       >
-        {matchedText}
+        <span className={textColor}>{matchedText}</span>
       </Highlighter>
     );
     
