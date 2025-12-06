@@ -60,3 +60,22 @@
 .no-scrollbar::-webkit-scrollbar {
   display: none; /* Chrome, Safari, Opera */
 }
+
+/* Custom scrollbar for genres submenu */
+.genres-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.genres-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.genres-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.genres-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+.genres-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
+}

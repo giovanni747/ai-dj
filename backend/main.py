@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import json
 import requests
+from typing import Optional
 
 from flask import Flask, session, url_for, redirect, request, jsonify
 from flask_cors import CORS
@@ -203,7 +204,7 @@ def is_authenticated():
     except:
         return False
 
-def translate_lyrics(lyrics: str) -> tuple[str, str | None]:
+def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
     """
     Translate lyrics to English if they're in a different language.
     

@@ -4,7 +4,7 @@ import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { cn } from "@/lib/utils";
-import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, Search, Cloud } from "lucide-react";
+import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, Search, Cloud, Compass, Heart, Music, ChevronRight } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { useAutoResizeTextarea } from "@/components/hooks/use-auto-resize-textarea";
 import { Typewriter } from "@/components/ui/typewriter";
@@ -57,12 +57,48 @@ PopoverContent.displayName = PopoverPrimitive.Content.displayName;
 
 // Tools list for the popover
 const toolsList = [
-  { id: 'createImage', name: 'Create an image', shortName: 'Image', icon: Sparkles },
-  { id: 'searchWeb', name: 'Search the web', shortName: 'Search', icon: Search },
-  { id: 'writeCode', name: 'Write or code', shortName: 'Write', icon: Pencil },
-  { id: 'deepResearch', name: 'Run deep research', shortName: 'Deep Search', icon: Globe, extra: '5 left' },
-  { id: 'thinkLonger', name: 'Think for longer', shortName: 'Think', icon: Lightbulb },
+  { id: 'discover', name: 'Discover', shortName: 'Discover', icon: Compass },
+  { id: 'emotion', name: 'Emotion', shortName: 'Emotion', icon: Heart, hasSubmenu: true },
+  { id: 'genres', name: 'Genres', shortName: 'Genres', icon: Music, hasSubmenu: true },
   { id: 'weather', name: 'Weather-based music', shortName: 'Weather', icon: Cloud },
+];
+
+// Emotions list
+const emotionsList = [
+  'Happy',
+  'Sad',
+  'Energetic',
+  'Calm',
+  'Romantic',
+  'Nostalgic',
+  'Motivated',
+  'Relaxed',
+  'Excited',
+  'Melancholic',
+  'Peaceful',
+  'Angry',
+  'Hopeful',
+  'Dreamy',
+  'Confident',
+];
+
+// Genres list
+const genresList = [
+  'Pop',
+  'Rock',
+  'Country',
+  'Latin',
+  'Hip-Hop',
+  'R&B',
+  'Jazz',
+  'Electronic',
+  'Classical',
+  'Reggae',
+  'Blues',
+  'Folk',
+  'Metal',
+  'Punk',
+  'Indie',
 ];
 
 interface ChatGPTPromptInputProps extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'onSubmit'> {
@@ -92,6 +128,8 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     const [value, setValue] = React.useState("");
     const [selectedTool, setSelectedTool] = React.useState<string | null>(null);
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false);
+    const [showEmotionSubmenu, setShowEmotionSubmenu] = React.useState(false);
+    const [showGenresSubmenu, setShowGenresSubmenu] = React.useState(false);
 
     const { adjustHeight } = useAutoResizeTextarea({
       minHeight,
@@ -126,8 +164,20 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     };
 
     const hasValue = value.trim().length > 0;
-    const activeTool = selectedTool ? toolsList.find(t => t.id === selectedTool) : null;
+    // Handle genre and emotion selections - extract the base tool ID
+    const baseToolId = selectedTool?.startsWith('genre-') ? 'genres' 
+      : selectedTool?.startsWith('emotion-') ? 'emotion' 
+      : selectedTool;
+    const activeTool = baseToolId ? toolsList.find(t => t.id === baseToolId) : null;
     const ActiveToolIcon = activeTool?.icon;
+    // Get the selected genre name if a genre is selected
+    const selectedGenre = selectedTool?.startsWith('genre-') 
+      ? genresList.find(g => g.toLowerCase() === selectedTool.replace('genre-', ''))
+      : null;
+    // Get the selected emotion name if an emotion is selected
+    const selectedEmotion = selectedTool?.startsWith('emotion-') 
+      ? emotionsList.find(e => e.toLowerCase() === selectedTool.replace('emotion-', ''))
+      : null;
 
     return (
       <div className={cn(
@@ -192,7 +242,13 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
           <TooltipProvider delayDuration={100}>
             <div className="flex items-center gap-2">
               {/* Tools popover */}
-              <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+              <Popover open={isPopoverOpen} onOpenChange={(open) => {
+                setIsPopoverOpen(open);
+                if (!open) {
+                  setShowEmotionSubmenu(false);
+                  setShowGenresSubmenu(false);
+                }
+              }}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <PopoverTrigger asChild>
@@ -209,30 +265,95 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                     <p>Explore Tools</p>
                   </TooltipContent>
                 </Tooltip>
-                <PopoverContent side="top" align="start">
-                  <div className="flex flex-col gap-1">
-                    {toolsList.map((tool) => {
-                      const Icon = tool.icon;
-                      return (
-                        <button
-                          key={tool.id}
-                          onClick={() => {
-                            setSelectedTool(tool.id);
-                            setIsPopoverOpen(false);
-                          }}
-                          className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
-                        >
-                          <Icon className="h-4 w-4" />
-                          <span>{tool.name}</span>
-                          {tool.extra && (
-                            <span className="ml-auto text-xs text-white/50">
-                              {tool.extra}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                <PopoverContent side="top" align="start" className="relative">
+                  {!showEmotionSubmenu && !showGenresSubmenu ? (
+                    <div className="flex flex-col gap-1">
+                      {toolsList.map((tool) => {
+                        const Icon = tool.icon;
+                        return (
+                          <button
+                            key={tool.id}
+                            onClick={() => {
+                              if (tool.id === 'emotion' && tool.hasSubmenu) {
+                                setShowEmotionSubmenu(true);
+                              } else if (tool.id === 'genres' && tool.hasSubmenu) {
+                                setShowGenresSubmenu(true);
+                              } else {
+                                setSelectedTool(tool.id);
+                                setIsPopoverOpen(false);
+                              }
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <Icon className="h-4 w-4" />
+                            <span>{tool.name}</span>
+                            {tool.hasSubmenu && (
+                              <ChevronRight className="h-4 w-4 ml-auto" />
+                            )}
+                            {tool.extra && (
+                              <span className="ml-auto text-xs text-white/50">
+                                {tool.extra}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : showEmotionSubmenu ? (
+                    <div className="flex flex-col gap-1 w-48">
+                      <button
+                        onClick={() => setShowEmotionSubmenu(false)}
+                        className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors mb-1"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>Back</span>
+                      </button>
+                      <div className="h-px bg-white/10 my-1" />
+                      <div className="max-h-48 overflow-y-auto genres-scrollbar">
+                        {emotionsList.map((emotion) => (
+                          <button
+                            key={emotion}
+                            onClick={() => {
+                              setSelectedTool(`emotion-${emotion.toLowerCase()}`);
+                              setShowEmotionSubmenu(false);
+                              setIsPopoverOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors"
+                          >
+                            <Heart className="h-3.5 w-3.5" />
+                            <span>{emotion}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1 w-48">
+                      <button
+                        onClick={() => setShowGenresSubmenu(false)}
+                        className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors mb-1"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>Back</span>
+                      </button>
+                      <div className="h-px bg-white/10 my-1" />
+                      <div className="max-h-48 overflow-y-auto genres-scrollbar">
+                        {genresList.map((genre) => (
+                          <button
+                            key={genre}
+                            onClick={() => {
+                              setSelectedTool(`genre-${genre.toLowerCase()}`);
+                              setShowGenresSubmenu(false);
+                              setIsPopoverOpen(false);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors"
+                          >
+                            <Music className="h-3.5 w-3.5" />
+                            <span>{genre}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </PopoverContent>
               </Popover>
 
@@ -244,7 +365,9 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                     className="flex h-8 items-center gap-2 rounded-full px-2 text-sm text-white hover:bg-white/10 cursor-pointer transition-colors"
                   >
                     {ActiveToolIcon && <ActiveToolIcon className="h-4 w-4" />}
-                    {activeTool.shortName}
+                    {selectedEmotion ? `${activeTool.shortName}: ${selectedEmotion}` 
+                      : selectedGenre ? `${activeTool.shortName}: ${selectedGenre}` 
+                      : activeTool.shortName}
                     <X className="h-4 w-4" />
                   </button>
                 </>

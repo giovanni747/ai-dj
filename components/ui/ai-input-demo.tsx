@@ -26,6 +26,7 @@ import dynamic from "next/dynamic";
 import { WebGLShader } from "@/components/ui/web-gl-shader";
 import { useUser } from "@clerk/nextjs";
 import { ImageCarouselHero, type ImageCard } from "@/components/ui/image-carousel-hero";
+import { MorphicNavbar } from "@/components/kokonutui/morphic-navbar";
 
 const DynamicRiveAvatar = dynamic(
   () => import("./dj-rive-avatar").then((m) => m.DjRiveAvatar),
@@ -101,18 +102,25 @@ export function AIInputWithLoadingDemo({
         setFrequentlyLikedTerms(termsSet);
         console.log(`✅ Loaded ${termsSet.size} frequently liked terms`);
       } else {
-        // Silently fail if not authenticated (401/403) - don't log as error
-        if (response.status === 401 || response.status === 403) {
+        // Silently handle expected error cases - don't log as error
+        const status = response.status;
+        if (status === 401 || status === 403) {
+          // User not authenticated - this is expected
           return;
         }
-        console.error('Failed to load frequently liked terms');
+        if (status === 404) {
+          // User has no frequently liked terms yet - this is normal
+          return;
+        }
+        // Only log unexpected errors as warnings (not errors)
+        if (status >= 500) {
+          console.warn('Backend error loading frequently liked terms:', status);
+        }
+        // For other status codes, silently fail
       }
     } catch (error) {
-      // Silently fail if network error - don't log as error for unauthenticated users
-      if (!isSignedIn) {
-        return;
-      }
-      console.error('Error loading frequently liked terms:', error);
+      // Silently fail if network error - don't log as error
+      // This is not critical functionality, so we don't need to alert the user
     }
   }, [isSignedIn]);
 
@@ -784,6 +792,13 @@ export function AIInputWithLoadingDemo({
 
       {/* Main Chat Area */}
       <div className="flex-1 relative flex flex-col h-full bg-[#0F0F0F] rounded-3xl overflow-hidden shadow-2xl border border-white/5">
+        {/* Navbar - centered in this container */}
+        <div className="absolute top-4 left-0 right-0 z-30 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto">
+            <MorphicNavbar />
+          </div>
+        </div>
+
         <WebGLShader 
           className="absolute inset-0 w-full h-full pointer-events-none" 
           speed={isMusicPlaying ? 0.08 : 0.01}
