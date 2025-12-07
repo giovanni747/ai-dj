@@ -13,7 +13,7 @@ import {
   ThumbsUpIcon,
   Volume2, VolumeX
 } from "lucide-react";
-import { useTextToSpeech } from "@/components/hooks/use-text-to-speech";
+import { useElevenLabsTTS } from "@/components/hooks/use-elevenlabs-tts";
 import { Action, Actions } from "@/components/ui/actions";
 import {
   Conversation,
@@ -24,10 +24,12 @@ import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import dynamic from "next/dynamic";
 import { WebGLShader } from "@/components/ui/web-gl-shader";
 import { useUser } from "@clerk/nextjs";
-import { ImageCarouselHero, type ImageCard } from "@/components/ui/image-carousel-hero";
-import { MorphicNavbar } from "@/components/kokonutui/morphic-navbar";
+import type { ImageCard } from "@/components/ui/image-carousel-hero";
+import { MorphicNavbar, type NavTab } from "@/components/kokonutui/morphic-navbar";
 import { RadialIntro, type OrbitItem } from "@/components/ui/radial-intro";
 import { HandWrittenTitle } from "@/components/ui/hand-writing-text";
+import { DashboardTab } from "@/components/ui/dashboard-tab";
+import { PersonalTab } from "@/components/ui/personal-tab";
 
 const DynamicRiveAvatar = dynamic(
   () => import("./dj-rive-avatar").then((m) => m.DjRiveAvatar),
@@ -81,6 +83,7 @@ export function AIInputWithLoadingDemo({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
   const [heroImages, setHeroImages] = useState<ImageCard[]>([]);
+  const [activeTab, setActiveTab] = useState<NavTab>("dj");
   // Manage bubble visibility
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
 
@@ -117,15 +120,15 @@ export function AIInputWithLoadingDemo({
         }
         if (status === 404) {
           // User has no frequently liked terms yet - this is normal
-          return;
-        }
+        return;
+      }
         // Only log unexpected errors as warnings (not errors)
         if (status >= 500) {
           console.warn('Backend error loading frequently liked terms:', status);
         }
         // For other status codes, silently fail
       }
-    } catch (error) {
+    } catch {
       // Silently fail if network error - don't log as error
       // This is not critical functionality, so we don't need to alert the user
     }
@@ -559,8 +562,11 @@ export function AIInputWithLoadingDemo({
     return latest || null;
   }, [messages]);
 
-  // Text-to-Speech Hook
-  const { speak, cancel, isMuted, toggleMute, isSpeaking } = useTextToSpeech();
+  // ElevenLabs Text-to-Speech Hook (falls back to browser TTS if not configured)
+  const { speak, cancel, isMuted, toggleMute, isSpeaking } = useElevenLabsTTS({
+    voiceId: '21m00Tcm4TlvDq8ikWAM', // Rachel - popular default voice
+    // Other great voices: 'EXAVITQu4vr4xnSDxMaL', 'VR6AewLTigWG4xSOukaG', 'ThT5KcBeYPX3keUQqHPh'
+  });
 
   // Manage bubble visibility effect
   // Only update when the message ID actually changes to prevent flashing
@@ -619,7 +625,7 @@ export function AIInputWithLoadingDemo({
       let location: { lat?: number; lon?: number } | null = null;
       if (selectedTool === 'weather') {
         try {
-          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            const position = await new Promise<GeolocationPosition>((resolve, reject) => {
             if (!navigator.geolocation) {
               reject(new Error('Geolocation is not supported by this browser'));
               return;
@@ -628,17 +634,17 @@ export function AIInputWithLoadingDemo({
               timeout: 5000,
               enableHighAccuracy: false
             });
-          });
-          location = {
-            lat: position.coords.latitude,
-            lon: position.coords.longitude
-          };
+            });
+            location = {
+              lat: position.coords.latitude,
+              lon: position.coords.longitude
+            };
           console.log('📍 User location obtained:', location);
         } catch (error) {
           console.warn('⚠️ Could not get user location, will use default:', error);
-          // Continue without location - backend will use default
+            // Continue without location - backend will use default
+          }
         }
-      }
 
       // Call the Next.js API route which forwards to Flask backend
       const response = await fetch('/api/dj-recommend', {
@@ -836,7 +842,7 @@ export function AIInputWithLoadingDemo({
         {/* Navbar - centered in this container */}
         <div className="absolute top-4 left-0 right-0 z-30 flex justify-center pointer-events-none">
           <div className="pointer-events-auto">
-            <MorphicNavbar />
+            <MorphicNavbar activeTab={activeTab} onTabChange={setActiveTab} />
           </div>
         </div>
 
@@ -865,6 +871,12 @@ export function AIInputWithLoadingDemo({
           />
         )}
           <ConversationContent className={hasMessages ? "pt-20 pb-32" : "pt-[10vh] pb-20 flex flex-col justify-start min-h-full"}>
+          {/* Render tab content */}
+          {activeTab === "dashboard" && <DashboardTab />}
+          {activeTab === "personal" && <PersonalTab />}
+          
+          {/* Show DJ chat only when on DJ tab */}
+          {activeTab === "dj" && (
           <div className={cn(
               "max-w-4xl w-full mx-auto flex flex-col gap-8 px-4 md:px-12",
             (messages.length === 0 && !isSubmitting) ? "items-center justify-center" : ""
@@ -985,18 +997,18 @@ export function AIInputWithLoadingDemo({
                             "bg-white/5 backdrop-blur-md border border-white/10"
                           )}
                         >
-                          <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
-                              🎵 Your Playlist <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60">{msg.tracks.length}</span>
-                            </h3>
-                          </div>
-                          <TrackList
-                            tracks={msg.tracks}
-                            likedTracks={msg.likedTracks || new Set()}
-                            onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
-                            frequentlyLikedTerms={frequentlyLikedTerms}
+                            <div className="flex items-center justify-between mb-3">
+                              <h3 className="text-sm font-semibold text-white/80 flex items-center gap-2">
+                                🎵 Your Playlist <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full text-white/60">{msg.tracks.length}</span>
+                              </h3>
+                            </div>
+                            <TrackList
+                              tracks={msg.tracks}
+                              likedTracks={msg.likedTracks || new Set()}
+                              onToggleLike={(trackId) => handleToggleTrackLike(msg.id, trackId)}
+                              frequentlyLikedTerms={frequentlyLikedTerms}
                             onPlaybackChange={setIsMusicPlaying}
-                          />
+                            />
                         </motion.div>
 
                         {/* Action buttons for assistant messages - like, dislike */}
@@ -1078,10 +1090,12 @@ export function AIInputWithLoadingDemo({
               </motion.div>
             )}
           </div>
+          )}
         </ConversationContent>
       </Conversation>
 
-      {/* Input - always at bottom */}
+      {/* Input - only show on DJ tab */}
+      {activeTab === "dj" && (
       <div className={cn(
         "w-full z-30 absolute bottom-0 left-0 pb-6 pt-10 bg-linear-to-t from-[#0F0F0F] via-[#0F0F0F]/90 to-transparent"
       )}>
@@ -1100,6 +1114,7 @@ export function AIInputWithLoadingDemo({
           />
         </div>
         </div>
+      )}
       </div>
     </div>
   );

@@ -267,38 +267,38 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                 </Tooltip>
                 <PopoverContent side="top" align="start" className="relative">
                   {!showEmotionSubmenu && !showGenresSubmenu ? (
-                    <div className="flex flex-col gap-1">
-                      {toolsList.map((tool) => {
-                        const Icon = tool.icon;
-                        return (
-                          <button
-                            key={tool.id}
-                            onClick={() => {
+                  <div className="flex flex-col gap-1">
+                    {toolsList.map((tool) => {
+                      const Icon = tool.icon;
+                      return (
+                        <button
+                          key={tool.id}
+                          onClick={() => {
                               if (tool.id === 'emotion' && tool.hasSubmenu) {
                                 setShowEmotionSubmenu(true);
                               } else if (tool.id === 'genres' && tool.hasSubmenu) {
                                 setShowGenresSubmenu(true);
                               } else {
-                                setSelectedTool(tool.id);
-                                setIsPopoverOpen(false);
+                            setSelectedTool(tool.id);
+                            setIsPopoverOpen(false);
                               }
-                            }}
-                            className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
-                          >
-                            <Icon className="h-4 w-4" />
-                            <span>{tool.name}</span>
+                          }}
+                          className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
+                        >
+                          <Icon className="h-4 w-4" />
+                          <span>{tool.name}</span>
                             {tool.hasSubmenu && (
                               <ChevronRight className="h-4 w-4 ml-auto" />
                             )}
-                            {tool.extra && (
-                              <span className="ml-auto text-xs text-white/50">
-                                {tool.extra}
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                            {'extra' in tool && tool.extra && (
+                            <span className="ml-auto text-xs text-white/50">
+                              {tool.extra}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                   ) : showEmotionSubmenu ? (
                     <div className="flex flex-col gap-1 w-48">
                       <button

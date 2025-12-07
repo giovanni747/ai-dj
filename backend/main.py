@@ -5,6 +5,7 @@ import json
 import requests
 from typing import Optional
 import concurrent.futures
+import time
 
 from flask import Flask, session, url_for, redirect, request, jsonify
 from flask_cors import CORS
@@ -205,89 +206,241 @@ def is_authenticated():
     except:
         return False
 
-def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
+# Translation cache to avoid redundant API calls
+_translation_cache = {}
+
+def quick_language_detect(lyrics: str) -> Optional[str]:
     """
-    Translate lyrics to English if they're in a different language.
+    Fast language detection using simple heuristics before LLM call.
+    Returns language code if confident, None if needs LLM detection.
+    
+    More strict criteria to avoid false positives on English songs with few foreign words.
+    """
+    if not lyrics or len(lyrics) < 100:  # Increased minimum length
+        return None
+    
+    # Get first 300 words for analysis (increased from 200)
+    words = lyrics.lower().split()[:300]
+    sample = ' '.join(words)
+    total_words = len(words)
+    
+    # Common indicators for different languages
+    spanish_indicators = ['que', 'con', 'por', 'para', 'esta', 'está', 'son', 'del', 'una', 'las', 'los', 'el', 'la', 'mi', 'tu', 'sus', 'como', 'pero', 'cuando', 'donde']
+    french_indicators = ['que', 'de', 'la', 'le', 'et', 'les', 'des', 'un', 'une', 'est', 'dans', 'pour', 'pas', 'ce', 'qui', 'il', 'elle', 'nous', 'vous', 'sont']
+    portuguese_indicators = ['que', 'de', 'para', 'com', 'uma', 'os', 'das', 'pelo', 'pela', 'não', 'mais', 'meu', 'teu', 'seu', 'está', 'são', 'foi', 'porque', 'quando', 'onde']
+    
+    # Count matches (case-insensitive, whole words)
+    spanish_count = sum(1 for word in spanish_indicators if f' {word} ' in f' {sample} ')
+    french_count = sum(1 for word in french_indicators if f' {word} ' in f' {sample} ')
+    portuguese_count = sum(1 for word in portuguese_indicators if f' {word} ' in f' {sample} ')
+    
+    # Calculate percentage of foreign words (more strict)
+    spanish_percentage = (spanish_count / total_words * 100) if total_words > 0 else 0
+    french_percentage = (french_count / total_words * 100) if total_words > 0 else 0
+    portuguese_percentage = (portuguese_count / total_words * 100) if total_words > 0 else 0
+    
+    # Only mark as non-English if:
+    # 1. High absolute count (>10 matches) AND
+    # 2. High percentage (>15% of words are foreign indicators)
+    if spanish_count > 10 and spanish_percentage > 15 and spanish_count > french_count and spanish_count > portuguese_count:
+        return "es"
+    elif portuguese_count > 10 and portuguese_percentage > 15 and portuguese_count > spanish_count:
+        return "pt"
+    elif french_count > 10 and french_percentage > 15 and french_count > spanish_count:
+        return "fr"
+    
+    return None  # Need LLM detection (or likely English)
+
+def batch_detect_and_translate(lyrics_list: list) -> list:
+    """
+    Batch detect languages and translate non-English lyrics in ONE API call.
+    This replaces sequential detect->translate calls for massive speedup.
     
     Args:
-        lyrics: Original lyrics text
+        lyrics_list: List of lyrics strings to process
     
     Returns:
-        Tuple of (translated_lyrics, detected_language) or (original_lyrics, None) if already English or error
+        List of tuples: [(translated_lyrics, detected_language), ...]
+    """
+    if not lyrics_list:
+        return []
+    
+    from groq import Groq
+    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    
+    # Quick pre-check with heuristics
+    pre_detected = [quick_language_detect(lyrics) for lyrics in lyrics_list]
+    
+    # Build batch prompt for combined detection + translation
+    # Truncate to 1200 chars for faster, more reliable translation
+    # (captures chorus + key verses while keeping batch size manageable)
+    prompt_parts = []
+    truncated_lyrics = []
+    
+    for i, (lyrics, pre_lang) in enumerate(zip(lyrics_list, pre_detected)):
+        # Truncate to 1200 chars at word boundary (keeps key content, faster processing)
+        if len(lyrics) > 1200:
+            # Find the last space before 1200 chars to avoid cutting mid-word
+            truncate_point = lyrics.rfind(' ', 0, 1200)
+            # If no space found (unlikely), just truncate at 1200
+            lyrics_truncated = lyrics[:truncate_point] if truncate_point > 0 else lyrics[:1200]
+        else:
+            lyrics_truncated = lyrics
+        
+        truncated_lyrics.append(lyrics_truncated)
+        
+        if pre_lang:
+            # Pre-detected language
+            prompt_parts.append(f'\n=== Text {i+1} ===\nLanguage: {pre_lang}\n{lyrics_truncated}')
+        else:
+            # Need LLM to detect
+            prompt_parts.append(f'\n=== Text {i+1} ===\n{lyrics_truncated}')
+    
+    # Combined detection and translation prompt
+    prompt = f"""For each text below, detect the language and translate to English if non-English.
+
+CRITICAL RULES:
+1. Preserve ALL line breaks, spacing, and formatting EXACTLY
+2. If language is English (en), return the EXACT same text
+3. If non-English, translate COMPLETELY while preserving structure
+4. Do NOT skip lines or return partial translations
+
+Return JSON format:
+{{"results": [
+  {{"index": 1, "language": "es", "translated": "English translation with preserved line breaks"}},
+  {{"index": 2, "language": "en", "translated": "exact same English text"}},
+  ...
+]}}
+
+Language codes: es (Spanish), en (English), fr (French), pt (Portuguese), it (Italian), de (German)
+
+Texts to process:
+{chr(10).join(prompt_parts)}
+
+Return ONLY the JSON object."""
+    
+    try:
+        # Calculate dynamic max_tokens based on TRUNCATED input length
+        total_chars = sum(len(l) for l in truncated_lyrics)
+        estimated_tokens = int(total_chars * 2.5)  # Translation can be longer, increased multiplier
+        max_tokens = max(4000, min(estimated_tokens, 8000))  # Increased range: 4k-8k tokens to prevent truncation
+        
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",  # Fast model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,  # Lower for more consistent formatting
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"}
+        )
+        
+        response_text = response.choices[0].message.content
+        
+        # Try to parse JSON, with fallback for partial/incomplete JSON
+        try:
+            result_json = json.loads(response_text)
+        except json.JSONDecodeError as json_err:
+            # Try to extract partial JSON if response was truncated
+            print(f"    ⚠️  JSON parse error, attempting to extract partial results: {json_err}")
+            # Try to find and parse just the results array
+            import re
+            results_match = re.search(r'"results"\s*:\s*\[(.*?)\]', response_text, re.DOTALL)
+            if results_match:
+                try:
+                    # Try to reconstruct valid JSON from partial response
+                    partial_json = '{"results": [' + results_match.group(1) + ']}'
+                    result_json = json.loads(partial_json)
+                    print(f"    ✅ Successfully parsed partial JSON")
+                except:
+                    # If that fails, try to extract individual result objects
+                    result_objects = re.findall(r'\{"index":\s*(\d+),\s*"language":\s*"([^"]+)",\s*"translated":\s*"(.*?)"\}', response_text, re.DOTALL)
+                    if result_objects:
+                        results = []
+                        for idx, lang, trans in result_objects:
+                            # Clean up translation text (remove escape sequences)
+                            trans_clean = trans.replace('\\n', '\n').replace('\\"', '"').replace('\\\'', "'")
+                            results.append({"index": int(idx), "language": lang, "translated": trans_clean})
+                        result_json = {"results": results}
+                        print(f"    ✅ Extracted {len(results)} partial results from incomplete JSON")
+                    else:
+                        raise json_err
+            else:
+                raise json_err
+        
+        results = result_json.get("results", [])
+            
+        # Map results back to original list
+        output = []
+        for i, (full_lyrics, truncated) in enumerate(zip(lyrics_list, truncated_lyrics)):
+            # Find result for this index
+            result = next((r for r in results if r.get("index") == i+1), None)
+            
+            if result:
+                lang = result.get("language", "en").lower().strip()
+                translated_preview = result.get("translated", "").strip()
+                
+                # Validate translation
+                if not translated_preview:  # Empty translation
+                    print(f"    ⚠️  Translation {i+1} empty, using original")
+                    output.append((full_lyrics, lang if lang else "en"))
+                elif lang == "en":
+                    # English - use original full lyrics to preserve exact formatting
+                    output.append((full_lyrics, "en"))
+                elif len(translated_preview) < 100:  # Translation too short (likely failed)
+                    print(f"    ⚠️  Translation {i+1} too short ({len(translated_preview)} chars), using original")
+                    output.append((full_lyrics, lang))
+                else:
+                    # Non-English with valid translation
+                    # Use the translated preview (it has the key content: chorus + verses)
+                    output.append((translated_preview, lang))
+            else:
+                # Fallback - no result found, use pre-detected language if available
+                pre_lang = pre_detected[i] if i < len(pre_detected) else None
+                if pre_lang:
+                    print(f"    ⚠️  No result for lyrics {i+1}, using pre-detected language: {pre_lang}")
+                    output.append((full_lyrics, pre_lang))
+                else:
+                    print(f"    ⚠️  No result for lyrics {i+1}, assuming English")
+                    output.append((full_lyrics, "en"))
+        
+        return output
+        
+    except Exception as e:
+        print(f"    ⚠️  Batch translation error: {e}")
+        # Use pre-detected languages as fallback instead of marking everything as English
+        output = []
+        for i, (lyrics, pre_lang) in enumerate(zip(lyrics_list, pre_detected)):
+            if pre_lang:
+                # Use pre-detected language (keep original lyrics since translation failed)
+                output.append((lyrics, pre_lang))
+                print(f"    ⚠️  Lyrics {i+1}: Using pre-detected language '{pre_lang}' (translation API failed)")
+            else:
+                # Assume English if no pre-detection
+                output.append((lyrics, "en"))
+        return output
+
+def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
+    """
+    DEPRECATED: Single lyrics translation (kept for compatibility).
+    Use batch_detect_and_translate() for better performance.
     """
     if not lyrics:
         return lyrics, None
     
-    try:
-        # Use Groq API for translation (since we're already using it)
-        from groq import Groq
-        groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        
-        # First, detect language using a small sample
-        sample = lyrics[:500]  # Use first 500 chars for detection
-        
-        detect_prompt = f"""Detect the language of this text. Return ONLY the ISO 639-1 language code (e.g., "es", "fr", "en", "de", "pt", "it").
-If the text is in English, return "en". If you're unsure, return "en".
-
-Text: {sample}
-
-Language code:"""
-        
-        detection_response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Fast model for detection
-            messages=[{"role": "user", "content": detect_prompt}],
-            temperature=0.1,
-            max_tokens=10
-        )
-        
-        detected_lang = detection_response.choices[0].message.content.strip().lower()
-        # Clean up response (remove quotes, periods, etc.)
-        detected_lang = detected_lang.strip('"\'.,;:').lower()
-        
-        # If already English, return original
-        if detected_lang in ["en", "english"]:
-            print(f"    ℹ️  Lyrics already in English")
-            return lyrics, "en"
-        
-        print(f"    🌐 Detected language: {detected_lang}, translating to English...")
-        
-        # Translate to English using current Groq model
-        translate_prompt = f"""Translate the following song lyrics to English. 
-Preserve the line breaks and structure. Do not add any explanations or commentary, only return the translated lyrics.
-
-Original lyrics ({detected_lang}):
-{lyrics}
-
-English translation:"""
-        
-        try:
-            translation_response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",  # Fast model with 128k context window
-                messages=[{"role": "user", "content": translate_prompt}],
-                temperature=0.3,
-                max_tokens=2000
-            )
-            
-            translated = translation_response.choices[0].message.content.strip()
-            
-            # Clean up translation (remove any extra text the model might add)
-            if translated.startswith("English translation:"):
-                translated = translated.split("English translation:", 1)[1].strip()
-            if translated.startswith("Translation:"):
-                translated = translated.split("Translation:", 1)[1].strip()
-            
-            print(f"    ✅ Translated lyrics ({len(translated)} chars)")
-            return translated, detected_lang
-            
-        except Exception as translation_error:
-            # If translation fails, return original lyrics BUT preserve the detected language
-            print(f"    ⚠️  Translation error: {translation_error}, keeping original lyrics")
-            print(f"    ℹ️  Preserving detected language: {detected_lang}")
-            return lyrics, detected_lang  # Return detected language, not None!
-        
-    except Exception as e:
-        print(f"    ⚠️  Language detection or translation error: {e}, using original lyrics")
-        # If we can't even detect language, return None (will default to 'en' later)
+    # Check cache first
+    import hashlib
+    lyrics_hash = hashlib.md5(lyrics[:500].encode()).hexdigest()
+    if lyrics_hash in _translation_cache:
+        cached = _translation_cache[lyrics_hash]
+        print(f"    💾 Using cached translation")
+        return cached
+    
+    # Use batch function for single item
+    result = batch_detect_and_translate([lyrics])
+    if result:
+        translated, lang = result[0]
+        _translation_cache[lyrics_hash] = (translated, lang)
+        return translated, lang
+    
         return lyrics, None
 
 def get_lyrics(track_name, artist_name):
@@ -1052,7 +1205,7 @@ def dj_recommend():
                 previously_recommended_track_ids = chat_db.get_previously_recommended_tracks(
                     user_id=clerk_id,
                     user_message=user_message,
-                    similarity_threshold=0.7  # 70% word overlap threshold
+                    similarity_threshold=0.85  # Less strict - allow duplicates but not too frequently
                 )
             except Exception as e:
                 print(f"⚠️  Could not load previously recommended tracks: {e}")
@@ -1093,12 +1246,16 @@ def dj_recommend():
             print(f"🌤️ [WEATHER DEBUG] Weather data being passed to AI: {weather_data}", flush=True)
         sys.stdout.flush()
         
+        # ⏱️ TIMING: Main AI recommendation generation
+        start_time = time.time()
         ai_response_raw = ai_service.get_recommendations(
             user_message,
             user_profile,
             conversation_history,
             weather_data=weather_data
         )
+        ai_recommendation_time = time.time() - start_time
+        print(f"⏱️  [TIMING] AI Recommendations: {ai_recommendation_time:.2f}s")
         
         # Log raw AI response
         print(f"\n=== AI RAW RESPONSE ===")
@@ -1183,7 +1340,7 @@ def dj_recommend():
         print(f"\n=== PARSED LLM RECOMMENDATIONS ===")
         print(f"DJ Intro: {dj_intro}")
         print(f"Songs to search: {len(llm_songs)}")
-        for i, song in enumerate(llm_songs[:5], 1):
+        for i, song in enumerate(llm_songs[:6], 1):  # Show first 6 (we requested 6)
             print(f"  {i}. {song.get('title', 'Unknown')} by {song.get('artist', 'Unknown')}")
         print(f"==================================\n")
         
@@ -1197,13 +1354,14 @@ def dj_recommend():
         
         # Search Spotify for each recommended song
         # Exclude previously recommended tracks to avoid duplicates
+        # ⏱️ TIMING: Spotify search
+        spotify_search_start = time.time()
         tracks = []
         found_count = 0
-        skipped_duplicates = 0
         
-        print(f"\n=== CHECKING FOR PREVIOUSLY RECOMMENDED TRACKS ===")
+        print(f"\n=== SPOTIFY SEARCH (keeping duplicates, will select best 5) ===")
         if previously_recommended_track_ids:
-            print(f"⚠️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - will exclude duplicates")
+            print(f"ℹ️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - duplicates allowed (will select best 5)")
         else:
             print(f"ℹ️  No similar prompts found - all recommendations will be new")
         print(f"================================================\n")
@@ -1231,11 +1389,8 @@ def dj_recommend():
                     track = search_results['tracks']['items'][0]
                     track_id = track['id']
                     
-                    # Skip if this track was previously recommended for a similar prompt
-                    if track_id in previously_recommended_track_ids:
-                        skipped_duplicates += 1
-                        print(f"  ⏭️  Skipped (previously recommended): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
-                        continue
+                    # Keep duplicates - we'll remove the worst one later if we have more than 5
+                    # Previously skipped, now we keep all tracks to ensure we get 5
                     
                     found_count += 1
                     
@@ -1279,11 +1434,7 @@ def dj_recommend():
                         track = search_results['tracks']['items'][0]
                         track_id = track['id']
                         
-                        # Skip if this track was previously recommended for a similar prompt
-                        if track_id in previously_recommended_track_ids:
-                            skipped_duplicates += 1
-                            print(f"  ⏭️  Skipped (previously recommended): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
-                            continue
+                        # Keep duplicates - we'll remove the worst one later if we have more than 5
                         
                         found_count += 1
                         
@@ -1323,9 +1474,12 @@ def dj_recommend():
         
         print(f"\n=== SPOTIFY SEARCH RESULTS ===")
         print(f"Found {found_count} out of {len(llm_songs)} recommended songs")
-        if skipped_duplicates > 0:
-            print(f"Skipped {skipped_duplicates} duplicate(s) from similar prompts")
+        if found_count < len(llm_songs):
+            print(f"⚠️  Could not find {len(llm_songs) - found_count} song(s) on Spotify")
         print(f"==============================\n")
+        
+        spotify_search_time = time.time() - spotify_search_start
+        print(f"⏱️  [TIMING] Spotify Search: {spotify_search_time:.2f}s")
         
         # Try to fetch audio features for recommended tracks
         # Note: Audio features API may not be available for new apps (deprecated Nov 2024)
@@ -1479,67 +1633,113 @@ def dj_recommend():
             print(f"===============================\n")
         
         # If we found fewer than 5 tracks, add a warning
+        # Check if we have enough tracks (we requested 6, need at least 5)
         if len(tracks) < 5:
-            print(f"WARNING: Only found {len(tracks)} tracks. Consider adding fallback logic.")
+            print(f"⚠️  Only found {len(tracks)} tracks out of {len(llm_songs)} requested. May not reach minimum of 5 tracks.")
         
-        # Fetch lyrics for all tracks (should be 6), then batch score
-        print(f"\n=== FETCHING LYRICS & BATCH SCORING RELEVANCE ===")
-        print(f"Processing {len(tracks)} tracks (expecting 5)")
+        # ⏱️ TIMING: Lyrics fetching (now using BATCH translation)
+        lyrics_fetch_start = time.time()
+        # Fetch lyrics for all tracks with BATCH translation (should be up to 6, will select top 5 later)
+        print(f"\n=== FETCHING LYRICS & BATCH TRANSLATION + SCORING ===")
+        print(f"Processing {len(tracks)} tracks (will select best 5)")
         
-        # First, fetch all lyrics
-        tracks_with_lyrics = []
+        # Step 1: Fetch all lyrics from Genius in parallel (no translation yet)
+        def fetch_genius_lyrics(track_data):
+            """Fetch raw lyrics from Genius (no translation)"""
+            i, track = track_data
+            try:
+                print(f"\n[{i}/{len(tracks)}] Fetching lyrics: {track['name']} by {track['artist']}")
+                
+                if not genius:
+                    return (track, None, False)
+                
+                primary_artist = track['artist'].split(',')[0].strip() if ',' in track['artist'] else track['artist'].strip()
+                print(f"    🔍 Searching Genius for: '{track['name']}' by {primary_artist}")
+                
+                song = genius.search_song(track['name'], primary_artist)
+                
+                if song and song.lyrics:
+                    # Clean up lyrics
+                    lyrics = song.lyrics
+                    if lyrics.startswith("Lyrics"):
+                        lyrics = lyrics.split("\n", 1)[1] if "\n" in lyrics else lyrics
+                    lyrics = lyrics.strip()
+                    
+                    print(f"    ✅ Found lyrics ({len(lyrics)} chars)")
+                    return (track, lyrics, True)
+                else:
+                    print(f"    ⚠️  No lyrics found")
+                    return (track, None, False)
+                    
+            except Exception as e:
+                print(f"    ❌ Error fetching lyrics: {e}")
+                return (track, None, False)
+        
+        # Fetch all lyrics in parallel
+        tracks_with_raw_lyrics = []
+        lyrics_to_translate = []
+        lyrics_indices = []
         non_english_tracks = []
         
-        for i, track in enumerate(tracks, 1):
-            print(f"\n[{i}/{len(tracks)}] Fetching lyrics: {track['name']} by {track['artist']}")
+        track_indices = [(i+1, track) for i, track in enumerate(tracks)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            results = executor.map(fetch_genius_lyrics, track_indices)
             
-            try:
-                lyrics_data = get_lyrics(track['name'], track['artist'])
-                
-                if lyrics_data:
-                    print(f"  ✅ Lyrics found (original: {len(lyrics_data['original'])} chars, language: {lyrics_data['language']})")
-                    # Store translated lyrics for AI analysis
-                    track['lyrics'] = lyrics_data['translated']
-                    # Store original lyrics for display
-                    track['lyrics_original'] = lyrics_data['original']
-                    # Store detected language
-                    track['lyrics_language'] = lyrics_data['language']
-                    
-                    # Check if lyrics were actually translated
-                    lyrics_changed = lyrics_data['original'] != lyrics_data['translated']
-                    is_non_english = lyrics_data['language'] != 'en'
-                    
-                    # Debug: Show first 100 chars of each
-                    print(f"  🔍 Original preview: {lyrics_data['original'][:100]}...")
-                    print(f"  🔍 Translated preview: {lyrics_data['translated'][:100]}...")
-                    print(f"  🔍 Are different: {lyrics_changed}, Is non-English: {is_non_english}")
-                    
-                    print(f"  🌐 Language: {lyrics_data['language']} | Non-English: {is_non_english} | Translated: {lyrics_changed}")
-                    
-                    if is_non_english or lyrics_changed:
-                        non_english_tracks.append({
-                            'name': track['name'],
-                            'artist': track['artist'],
-                            'language': lyrics_data['language'],
-                            'was_translated': lyrics_changed
-                        })
-                        print(f"  ⭐ NON-ENGLISH TRACK DETECTED - Will show EN button")
-                    else:
-                        print(f"  ✓ English track - No translation needed")
-                    
-                    tracks_with_lyrics.append(track)
+            for track, lyrics, found in results:
+                if found and lyrics:
+                    tracks_with_raw_lyrics.append(track)
+                    lyrics_to_translate.append(lyrics)
+                    lyrics_indices.append(len(tracks_with_raw_lyrics) - 1)
                 else:
-                    print(f"  ⚠️ No lyrics available, using default score")
+                    # No lyrics available
                     track['lyrics'] = None
                     track['lyrics_original'] = None
                     track['lyrics_language'] = None
-                    track['lyrics_score'] = 3  # Default score for no lyrics (midpoint of 1-5)
-            except Exception as e:
-                print(f"  ❌ Error fetching lyrics: {e}")
-                track['lyrics'] = None
-                track['lyrics_original'] = None
-                track['lyrics_language'] = None
-                track['lyrics_score'] = 3  # Default score on error (midpoint of 1-5)
+                    track['lyrics_score'] = 3  # Default score (1-5 scale)
+                    tracks_with_raw_lyrics.append(track)
+        
+        print(f"\n✅ Fetched {len(lyrics_to_translate)} lyrics from Genius")
+        
+        # Step 2: BATCH translate all lyrics in ONE API call
+        if lyrics_to_translate:
+            print(f"\n🌐 Batch translating {len(lyrics_to_translate)} lyrics...")
+            
+            # Use batch translation function
+            translation_results = batch_detect_and_translate(lyrics_to_translate)
+            
+            # Apply results back to tracks
+            for idx, (translated_lyrics, detected_lang) in zip(lyrics_indices, translation_results):
+                track = tracks_with_raw_lyrics[idx]
+                original_lyrics = lyrics_to_translate[lyrics_indices.index(idx)]
+                
+                # ALWAYS store the original fetched lyrics
+                track['lyrics_original'] = original_lyrics
+                track['lyrics_language'] = detected_lang
+                
+                # For English lyrics, both will be the same (so toggle button won't show)
+                # For non-English, translated will be different (toggle button will show)
+                if detected_lang == 'en':
+                    # English song - no translation needed
+                    # Set lyrics to original, and lyrics_original to None to prevent toggle
+                    track['lyrics'] = original_lyrics
+                    track['lyrics_original'] = None  # No original needed for English
+                    print(f"    ✅ [{track['name']}]: English (no translation needed)")
+                else:
+                    # Non-English song - use translated version for lyrics field
+                    track['lyrics'] = translated_lyrics
+                    was_translated = translated_lyrics != original_lyrics
+                    non_english_tracks.append({
+                        'name': track['name'],
+                        'artist': track['artist'],
+                        'language': detected_lang,
+                        'was_translated': was_translated
+                    })
+                    print(f"    ✅ [{track['name']}]: {detected_lang} → en {'(translated)' if was_translated else '(kept original)'}")
+        
+        tracks_with_lyrics = tracks_with_raw_lyrics
+        
+        lyrics_fetch_time = time.time() - lyrics_fetch_start
+        print(f"⏱️  [TIMING] Lyrics Fetching (Parallel): {lyrics_fetch_time:.2f}s")
         
         # Print summary of non-English tracks
         if non_english_tracks:
@@ -1551,9 +1751,15 @@ def dj_recommend():
                 print(f"     Language: {t['language']} | Translated: {t['was_translated']}")
             print(f"{'='*60}\n")
         
+        # ⏱️ TIMING: Batch lyrics scoring
+        batch_score_start = time.time()
+        batch_score_time = 0
         # Batch score all tracks with lyrics in a single API call
-        if tracks_with_lyrics:
-            print(f"\n📊 Batch scoring {len(tracks_with_lyrics)} tracks with lyrics...")
+        # Filter to only tracks that actually have lyrics (not None)
+        tracks_with_valid_lyrics = [track for track in tracks_with_lyrics if track.get('lyrics')]
+        
+        if tracks_with_valid_lyrics:
+            print(f"\n📊 Batch scoring {len(tracks_with_valid_lyrics)} tracks with lyrics...")
             batch_data = [
                 {
                     'track_id': track['id'],
@@ -1561,15 +1767,20 @@ def dj_recommend():
                     'track_name': track['name'],
                     'artist_name': track['artist']
                 }
-                for track in tracks_with_lyrics
+                for track in tracks_with_valid_lyrics
             ]
             
             scores_by_id = ai_service.batch_score_lyrics_relevance(batch_data, user_message)
+            batch_score_time = time.time() - batch_score_start
+            print(f"⏱️  [TIMING] Batch Lyrics Scoring: {batch_score_time:.2f}s")
             
             # Apply scores to tracks
             for track in tracks:
                 if track['id'] in scores_by_id:
-                    track['lyrics_score'] = scores_by_id[track['id']]
+                    score = scores_by_id[track['id']]
+                    # Ensure score is between 1 and 5
+                    score = max(1, min(5, int(score)))
+                    track['lyrics_score'] = score
                     print(f"  📊 {track['name']}: lyrics score {track['lyrics_score']}/5")
         
         # Collect all tracks
@@ -1583,8 +1794,10 @@ def dj_recommend():
             # Convert to 0-10 scale (invert so higher is better)
             audio_score = (1 - audio_match_score) * 10
             
-            # Get lyrics score (1-5 scale)
+            # Get lyrics score (1-5 scale) - ensure it's clamped
             lyrics_score_raw = track.get('lyrics_score', 3)  # Default to 3 (midpoint)
+            lyrics_score_raw = max(1, min(5, int(lyrics_score_raw)))  # Clamp to 1-5
+            track['lyrics_score'] = lyrics_score_raw  # Update with clamped value
             # Normalize lyrics score to 0-10 scale for combination with audio score
             lyrics_score = ((lyrics_score_raw - 1) / 4) * 10  # Convert 1-5 to 0-10
             
@@ -1594,14 +1807,35 @@ def dj_recommend():
             
             print(f"  {track['name']}: Audio={audio_score:.1f}, Lyrics={lyrics_score_raw}/5 (normalized: {lyrics_score:.1f}), Combined={combined_score:.1f}")
         
-        # Sort by combined score (highest first) and take top 6 (safety measure in case we got more than 6)
+        # Sort by combined score (highest first) - best scores first
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
+        
+        # Always select exactly 5 tracks (remove worst ones if we have more than 5)
+        # If we have duplicates, they'll be included, but worst one gets removed
         selected_tracks = tracks_with_scores[:5]
         
-        print(f"\n✅ Selected top {len(selected_tracks)} tracks based on lyrics + audio features")
+        # Ensure we have exactly 5 tracks
+        if len(selected_tracks) < 5 and len(tracks_with_scores) > len(selected_tracks):
+            # If we don't have enough, try to take more (shouldn't happen with 6 requested)
+            print(f"⚠️  Only found {len(selected_tracks)} tracks, needed 5. Taking all available.")
+            selected_tracks = tracks_with_scores[:min(5, len(tracks_with_scores))]
+        
+        # Log which tracks were selected and which were removed
+        if len(tracks_with_scores) > 5:
+            removed_count = len(tracks_with_scores) - 5
+            print(f"\n✅ Selected top 5 tracks (removed {removed_count} lowest scoring track(s))")
+            if removed_count > 0:
+                print(f"   Removed tracks: {', '.join([t['name'] for t in tracks_with_scores[5:]])}")
+        else:
+            print(f"\n✅ Selected {len(selected_tracks)} tracks (all available)")
+        
         for i, track in enumerate(selected_tracks, 1):
             print(f"  {i}. {track['name']} - Score: {track.get('combined_score', 0):.1f}")
         
+        # ⏱️ TIMING: Explanations generation (parallel)
+        explanations_start = time.time()
+        # ⏱️ TIMING: Explanations generation (parallel)
+        explanations_start = time.time()
         # Generate explanations only for the final 5 selected tracks (PARALLEL)
         print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS (PARALLEL) ===")
         print(f"Processing {len(selected_tracks)} tracks for explanations in parallel...")
@@ -1653,7 +1887,7 @@ def dj_recommend():
                     print(f"  ✅ {track_name}: Generated explanation ({len(explanation)} chars) with {len(result['highlighted_terms'])} terms")
                 else:
                     print(f"  ⚠️ {track_name}: Explanation returned None")
-                    
+                
             except Exception as e:
                 print(f"  ❌ {track_name}: Error generating explanation: {e}")
                 result['error'] = str(e)
@@ -1667,6 +1901,9 @@ def dj_recommend():
             # Submit all tasks and get results
             results = list(executor.map(generate_track_explanation, track_data_list))
         
+        explanations_time = time.time() - explanations_start
+        print(f"⏱️  [TIMING] Explanations Generation (Parallel): {explanations_time:.2f}s")
+        
         # Apply results back to tracks
         for result in results:
             track = next((t for t in selected_tracks if t['id'] == result['track_id']), None)
@@ -1676,6 +1913,23 @@ def dj_recommend():
                 track['highlighted_terms_original'] = result['highlighted_terms_original']
         
         print(f"\n✅ Finished generating explanations for {len(selected_tracks)} tracks in parallel")
+        
+        # ⏱️ Print total timing summary (with flush to ensure it appears in logs)
+        total_time = time.time() - start_time
+        print(f"\n{'='*60}")
+        print(f"⏱️  [TIMING SUMMARY]")
+        print(f"{'='*60}")
+        print(f"  AI Recommendations:      {ai_recommendation_time:.2f}s ({ai_recommendation_time/total_time*100:.1f}%)")
+        print(f"  Spotify Search:          {spotify_search_time:.2f}s ({spotify_search_time/total_time*100:.1f}%)")
+        print(f"  Lyrics Fetching:         {lyrics_fetch_time:.2f}s ({lyrics_fetch_time/total_time*100:.1f}%)")
+        print(f"  Batch Lyrics Scoring:    {batch_score_time:.2f}s ({batch_score_time/total_time*100:.1f}%)")
+        print(f"  Explanations:            {explanations_time:.2f}s ({explanations_time/total_time*100:.1f}%)")
+        print(f"  ───────────────────────────────────────────")
+        print(f"  TOTAL:                   {total_time:.2f}s")
+        print(f"{'='*60}\n")
+        
+        # Force flush to ensure timing summary appears in logs before response
+        sys.stdout.flush()
         
         # Update positions for final tracks
         for i, track in enumerate(selected_tracks, 1):

@@ -1,67 +1,71 @@
 "use client";
 
 import clsx from "clsx";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 const navItems = {
-  "/": {
+  "dj": {
     name: "DJ",
   },
-  "/dashboard": {
+  "dashboard": {
     name: "Dashboard",
   },
-  "/personal": {
+  "personal": {
     name: "Personal",
   },
 };
 
-export function MorphicNavbar() {
-  const pathname = usePathname();
-  const [activePath, setActivePath] = useState(pathname || "/");
+export type NavTab = "dj" | "dashboard" | "personal";
 
-  useEffect(() => {
-    setActivePath(pathname || "/");
-  }, [pathname]);
+interface MorphicNavbarProps {
+  activeTab?: NavTab;
+  onTabChange?: (tab: NavTab) => void;
+}
 
-  const isActiveLink = (path: string) => {
-    if (path === "/") {
-      return activePath === "/";
-    }
-    return activePath.startsWith(path);
+export function MorphicNavbar({ activeTab = "dj", onTabChange }: MorphicNavbarProps) {
+  const [localActiveTab, setLocalActiveTab] = useState<NavTab>(activeTab);
+
+  const handleTabClick = (tab: NavTab) => {
+    setLocalActiveTab(tab);
+    onTabChange?.(tab);
+  };
+
+  const currentTab = activeTab || localActiveTab;
+
+  const isActiveLink = (tab: string) => {
+    return currentTab === tab;
   };
 
   return (
     <nav className="mx-auto max-w-4xl px-4 md:px-12 py-2">
       <div className="flex items-center justify-center">
         <div className="bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-between overflow-hidden rounded-xl shadow-xl">
-          {Object.entries(navItems).map(([path, { name }], index, array) => {
-            const isActive = isActiveLink(path);
+          {Object.entries(navItems).map(([tab, { name }], index, array) => {
+            const isActive = isActiveLink(tab);
             const isFirst = index === 0;
             const isLast = index === array.length - 1;
-            const prevPath = index > 0 ? array[index - 1][0] : null;
-            const nextPath =
+            const prevTab = index > 0 ? array[index - 1][0] : null;
+            const nextTab =
               index < array.length - 1 ? array[index + 1][0] : null;
 
             return (
-              <Link
+              <button
+                onClick={() => handleTabClick(tab as NavTab)}
                 className={clsx(
-                  "flex items-center justify-center p-1.5 px-4 text-sm text-white/80 transition-all duration-300",
+                  "flex items-center justify-center p-1.5 px-4 text-sm text-white/80 transition-all duration-300 cursor-pointer",
                   isActive
                     ? "mx-2 rounded-xl font-semibold text-sm bg-white/10 text-white backdrop-blur-sm"
                     : clsx(
                         "hover:bg-white/5 hover:text-white",
-                        (isActiveLink(prevPath || "") || isFirst) &&
+                        (isActiveLink(prevTab || "") || isFirst) &&
                           "rounded-l-xl",
-                        (isActiveLink(nextPath || "") || isLast) &&
+                        (isActiveLink(nextTab || "") || isLast) &&
                           "rounded-r-xl"
                       )
                 )}
-                href={path}
-                key={path}
+                key={tab}
               >
-                {path === "/" ? (
+                {tab === "dj" ? (
                   <svg 
                     xmlns="http://www.w3.org/2000/svg" 
                     viewBox="0 0 512 512" 
@@ -100,7 +104,7 @@ export function MorphicNavbar() {
                       z M490.995,491h-470v-20h470V491z" />
                     <path d="M291.347 258.071c3.905-3.905 3.905-10.237 0-14.143-3.906-3.904-10.236-3.904-14.143 0-11.695 11.695-30.723 11.695-42.418 0-3.906-3.904-10.236-3.904-14.143 0-3.905 3.905-3.905 10.237 0 14.143C240.138 277.564 271.853 277.563 291.347 258.071zM255.995 431c5.522 0 10-4.478 10-10v-10c0-5.522-4.478-10-10-10s-10 4.478-10 10v10C245.995 426.522 250.473 431 255.995 431z" />
                   </svg>
-                ) : path === "/dashboard" ? (
+                ) : tab === "dashboard" ? (
                   <svg 
                     xmlns="http://www.w3.org/2000/svg" 
                     fill="none" 
@@ -116,7 +120,7 @@ export function MorphicNavbar() {
                       d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" 
                     />
                   </svg>
-                ) : path === "/personal" ? (
+                ) : tab === "personal" ? (
                   <svg 
                     xmlns="http://www.w3.org/2000/svg" 
                     viewBox="0 0 16 16" 
@@ -130,7 +134,7 @@ export function MorphicNavbar() {
                 ) : (
                   name
                 )}
-              </Link>
+              </button>
             );
           })}
         </div>

@@ -227,7 +227,7 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                       <TooltipTrigger asChild>
                         <div className="cursor-help ml-2">
                           <BlurredStagger 
-                            text={`${track.lyrics_score}/5`}
+                            text={`${Math.max(1, Math.min(5, Math.round(track.lyrics_score || 3)))}/5`}
                             className="text-sm font-bold text-[#F3E2A0]"
                           />
                         </div>
@@ -364,62 +364,34 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                       {(() => {
                         const hasOriginal = !!track.lyrics_original;
                         const hasTranslated = !!track.lyrics;
-                        const lyricsDiffer = track.lyrics_original && track.lyrics && track.lyrics_original !== track.lyrics;
-                        // Show EN button if:
-                        // 1. Translation happened (original ≠ translated), OR
-                        // 2. Language is detected as non-English (even if translation failed)
-                        const isNonEnglish = track.lyrics_language && track.lyrics_language !== 'en';
-                        const shouldShowENButton = (hasOriginal && hasTranslated && lyricsDiffer) || (isNonEnglish && hasOriginal && hasTranslated);
                         
-                        // Debug logging for EN button
-                        if (track.lyrics) {
-                          if (shouldShowENButton) {
-                            console.log(`🔘 [EN BUTTON ✓] "${track.name}" by ${track.artist}:`, {
-                              lyrics_language: track.lyrics_language,
-                              isNonEnglish,
-                              hasTranslation: lyricsDiffer,
-                              has_lyrics_original: hasOriginal,
-                              has_lyrics_translated: hasTranslated,
-                            });
-                          } else {
-                            console.log(`⚪ [NO EN BUTTON] "${track.name}" by ${track.artist}:`, {
-                              lyrics_language: track.lyrics_language,
-                              isNonEnglish,
-                              hasTranslation: lyricsDiffer,
-                              has_lyrics_original: hasOriginal,
-                              has_lyrics_translated: hasTranslated,
-                              reason: !hasOriginal ? 'No original lyrics' 
-                                     : !hasTranslated ? 'No translated lyrics' 
-                                     : !isNonEnglish && !lyricsDiffer ? 'English song and no translation' 
-                                     : 'Unknown'
-                            });
-                          }
-                        }
+                        // Normalize for comparison (ignore minor whitespace differences)
+                        const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim();
+                        const lyricsDiffer = track.lyrics_original && track.lyrics && 
+                          normalizeText(track.lyrics_original) !== normalizeText(track.lyrics);
+                        
+                        // Show EN button ONLY if:
+                        // 1. Language is non-English
+                        // 2. Both lyrics exist
+                        // 3. Lyrics are meaningfully different
+                        const isNonEnglish = track.lyrics_language && track.lyrics_language !== 'en';
+                        const shouldShowENButton = isNonEnglish && hasOriginal && hasTranslated && lyricsDiffer;
                         
                         if (shouldShowENButton) {
-                          // Determine if translation actually exists
                           const hasTranslation = lyricsDiffer;
                           const currentShowingTranslated = showTranslatedLyrics.get(track.id) ?? true;
                           
-                          // Button title based on state
-                          let buttonTitle = "Toggle language";
-                          if (hasTranslation) {
-                            buttonTitle = currentShowingTranslated 
-                              ? "Show original lyrics" 
-                              : "Show English translation";
-                          } else {
-                            // Translation failed but language is non-English
-                            buttonTitle = `Language: ${track.lyrics_language?.toUpperCase() || 'Unknown'} (Translation unavailable)`;
-                          }
+                          const buttonTitle = currentShowingTranslated 
+                            ? `Showing English translation (click for ${track.lyrics_language?.toUpperCase() || 'original'})` 
+                            : `Showing ${track.lyrics_language?.toUpperCase() || 'original'} (click for English)`;
                           
                           return (
                             <Button
                               variant="outline"
                               size="icon"
-                              className="h-7 w-7 text-xs border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white"
+                              className="h-7 w-7 text-xs border-white/20 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                // Only toggle if translation exists
                                 if (hasTranslation) {
                                   const newMap = new Map(showTranslatedLyrics);
                                   const currentValue = newMap.get(track.id) ?? true;
@@ -430,7 +402,9 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                               disabled={!hasTranslation}
                               title={buttonTitle}
                             >
-                              <span className="text-[10px] font-medium">EN</span>
+                              <span className="text-[10px] font-medium">
+                                {currentShowingTranslated ? 'EN' : track.lyrics_language?.toUpperCase() || 'OG'}
+                              </span>
                               <span className="sr-only">Toggle language</span>
                             </Button>
                           );
@@ -447,17 +421,24 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                           ? track.lyrics
                           : (track.lyrics_original || track.lyrics || '');
                         
-                        // Only apply highlighting to English lyrics (translated version)
-                        // Original language lyrics won't have matching terms, so show plain text
+                        // Apply highlighting based on which version is shown
                         if (showingTranslated && track.lyrics) {
+                          // Highlight English (translated) lyrics
                           return highlightLyricsTerms(
                             lyricsToShow,
-                        track.highlighted_terms || [],
-                        frequentlyLikedTerms
+                            track.highlighted_terms || [],
+                            frequentlyLikedTerms
                           );
+                        } else if (!showingTranslated && track.lyrics_original) {
+                          // Highlight original language lyrics with original terms
+                        return highlightLyricsTerms(
+                          lyricsToShow,
+                            track.highlighted_terms_original || [],
+                          frequentlyLikedTerms
+                        );
                         }
                         
-                        // Show original lyrics without highlighting
+                        // Fallback: show plain text if no highlighting available
                         return lyricsToShow;
                       })()}
                     </div>
