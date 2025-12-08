@@ -1,18 +1,40 @@
 "use client";
 
 import { AIInputWithLoadingDemo } from "@/components/ui/ai-input-demo";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { HeroWave } from "@/components/ui/ai-input-hero";
-import { SignedIn, SignedOut, SignInButton, UserButton } from "@clerk/nextjs";
+import { SignedOut, SignInButton } from "@clerk/nextjs";
 import type { AuthResponse } from "@/types";
 
 export default function Home() {
   const [spotifyConnected, setSpotifyConnected] = useState<boolean>(false);
 
+  const checkSpotifyConnection = useCallback(async () => {
+    try {
+      const response = await fetch('/api/spotify-auth', {
+        credentials: 'include',
+      });
+      
+      if (response.ok) {
+        const data: AuthResponse = await response.json();
+        setSpotifyConnected(data.authenticated);
+      } else {
+        setSpotifyConnected(false);
+      }
+    } catch (error) {
+      console.error('Spotify connection check failed:', error);
+      setSpotifyConnected(false);
+    }
+  }, []);
+
+  // Initial connection check on mount
   useEffect(() => {
     checkSpotifyConnection();
-    
-    // Check URL params for Spotify auth redirect from Flask
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Check URL params for Spotify auth redirect from Flask
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const authStatus = params.get('auth');
     const sessionId = params.get('session_id');
@@ -35,39 +57,21 @@ export default function Home() {
       console.error('Spotify auth error:', error);
       window.history.replaceState({}, '', '/');
     }
-  }, []);
-
-  const checkSpotifyConnection = async () => {
-    try {
-      const response = await fetch('/api/spotify-auth', {
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        const data: AuthResponse = await response.json();
-        setSpotifyConnected(data.authenticated);
-      } else {
-        setSpotifyConnected(false);
-      }
-    } catch (error) {
-      console.error('Spotify connection check failed:', error);
-      setSpotifyConnected(false);
-    }
-  };
+  }, [checkSpotifyConnection]);
 
   return (
     <div className="relative min-h-screen">
       {/* Hero background */}
       <HeroWave showOverlay={false} />
       
-      {/* User button in top right when signed in */}
-      <SignedIn>
+      {/* User button removed from here - moved to Personal tab */}
+      {/* <SignedIn>
         <div className="fixed top-4 right-4 z-50 pointer-events-auto">
           <UserButton afterSignOutUrl="/" />
         </div>
-      </SignedIn>
+      </SignedIn> */}
       
-      {/* Sign In button in top right when signed out */}
+      {/* Sign In button in top right when signed out - keep this for access */}
       <SignedOut>
         <div className="fixed top-4 right-4 z-50 pointer-events-auto">
           <SignInButton mode="modal">

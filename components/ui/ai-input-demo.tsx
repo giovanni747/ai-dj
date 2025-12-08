@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { ProgressiveBlur } from "@/components/ui/progressive-blur";
 import dynamic from "next/dynamic";
 import { WebGLShader } from "@/components/ui/web-gl-shader";
-import { useUser } from "@clerk/nextjs";
+import { useUser, SignedIn } from "@clerk/nextjs";
 import type { ImageCard } from "@/components/ui/image-carousel-hero";
 import { MorphicNavbar, type NavTab } from "@/components/kokonutui/morphic-navbar";
 import { RadialIntro, type OrbitItem } from "@/components/ui/radial-intro";
@@ -84,6 +84,14 @@ export function AIInputWithLoadingDemo({
   const [frequentlyLikedTerms, setFrequentlyLikedTerms] = useState<Set<string>>(new Set());
   const [heroImages, setHeroImages] = useState<ImageCard[]>([]);
   const [activeTab, setActiveTab] = useState<NavTab>("dj");
+
+  // Reset tab to DJ when signed out
+  useEffect(() => {
+    if (!isSignedIn && activeTab !== "dj") {
+      setActiveTab("dj");
+    }
+  }, [isSignedIn, activeTab]);
+
   // Manage bubble visibility
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
 
@@ -303,6 +311,8 @@ export function AIInputWithLoadingDemo({
           track_name: track.name,
           track_artist: track.artist,
           track_image_url: imageUrl,
+          preview_url: track.preview_url || null,
+          duration_ms: track.duration_ms || null,
           highlighted_terms: isCurrentlyLiked ? undefined : highlightedTerms, // Only send when liking
         }),
       });
@@ -842,7 +852,9 @@ export function AIInputWithLoadingDemo({
         {/* Navbar - centered in this container */}
         <div className="absolute top-4 left-0 right-0 z-30 flex justify-center pointer-events-none">
           <div className="pointer-events-auto">
-            <MorphicNavbar activeTab={activeTab} onTabChange={setActiveTab} />
+            <SignedIn>
+              <MorphicNavbar activeTab={activeTab} onTabChange={setActiveTab} />
+            </SignedIn>
           </div>
         </div>
 

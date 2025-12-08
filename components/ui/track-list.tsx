@@ -379,7 +379,7 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                         
                         if (shouldShowENButton) {
                           const hasTranslation = lyricsDiffer;
-                          const currentShowingTranslated = showTranslatedLyrics.get(track.id) ?? true;
+                          const currentShowingTranslated = showTranslatedLyrics.get(track.id) ?? false; // Default to showing original lyrics first
                           
                           const buttonTitle = currentShowingTranslated 
                             ? `Showing English translation (click for ${track.lyrics_language?.toUpperCase() || 'original'})` 
@@ -416,7 +416,7 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                   {expandedTracks.has(`${track.id}-lyrics`) && (
                     <div className="mt-1 p-3 bg-white/5 rounded text-xs text-white/70 leading-relaxed max-h-60 overflow-y-auto overflow-x-hidden relative whitespace-pre-wrap">
                       {(() => {
-                        const showingTranslated = showTranslatedLyrics.get(track.id) ?? true;
+                        const showingTranslated = showTranslatedLyrics.get(track.id) ?? false; // Default to showing original lyrics first
                         const lyricsToShow = showingTranslated && track.lyrics
                           ? track.lyrics
                           : (track.lyrics_original || track.lyrics || '');

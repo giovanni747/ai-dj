@@ -8,6 +8,7 @@ import { CornerRightUp, Settings2, X, Mic, Globe, Pencil, Sparkles, Lightbulb, S
 import { Spinner } from "@/components/ui/spinner";
 import { useAutoResizeTextarea } from "@/components/hooks/use-auto-resize-textarea";
 import { Typewriter } from "@/components/ui/typewriter";
+import { motion } from "framer-motion";
 
 // --- Radix Primitives ---
 const TooltipProvider = TooltipPrimitive.Provider;
@@ -63,24 +64,10 @@ const toolsList = [
   { id: 'weather', name: 'Weather-based music', shortName: 'Weather', icon: Cloud },
 ];
 
-// Emotions list
-const emotionsList = [
-  'Happy',
-  'Sad',
-  'Energetic',
-  'Calm',
-  'Romantic',
-  'Nostalgic',
-  'Motivated',
-  'Relaxed',
-  'Excited',
-  'Melancholic',
-  'Peaceful',
-  'Angry',
-  'Hopeful',
-  'Dreamy',
-  'Confident',
-];
+interface EmotionData {
+  emotion: string;
+  definition: string;
+}
 
 // Genres list
 const genresList = [
@@ -130,6 +117,91 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     const [isPopoverOpen, setIsPopoverOpen] = React.useState(false);
     const [showEmotionSubmenu, setShowEmotionSubmenu] = React.useState(false);
     const [showGenresSubmenu, setShowGenresSubmenu] = React.useState(false);
+    const [emotionsData, setEmotionsData] = React.useState<EmotionData[]>([]);
+
+    React.useEffect(() => {
+      const fetchEmotions = async () => {
+        try {
+          const response = await fetch('/api/user-emotions-proxy', {
+             credentials: 'include'
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.emotions && Array.isArray(data.emotions)) {
+              setEmotionsData(data.emotions);
+            }
+          }
+        } catch (error) {
+          console.error("Failed to fetch user emotions:", error);
+        }
+      };
+      
+      fetchEmotions();
+    }, []);
+
+    const renderHighlightedText = (text: string) => {
+      if (!emotionsData.length || !text) return <span>{text}</span>;
+      
+      const sortedEmotions = [...emotionsData].sort((a, b) => b.emotion.length - a.emotion.length);
+      if (sortedEmotions.length === 0) return <span>{text}</span>;
+
+      const pattern = new RegExp(`\\b(${sortedEmotions.map(e => e.emotion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'gi');
+      
+      const parts = text.split(pattern);
+      
+      return (
+        <>
+          {parts.map((part, i) => {
+            const match = sortedEmotions.find(e => e.emotion.toLowerCase() === part.toLowerCase());
+            if (match) {
+              // Calculate approximate width based on character count (in pixels)
+              const charWidth = 8; // Approximate pixel width per character for text-sm
+              const textWidth = Math.max(part.length * charWidth, 30); // Minimum width
+              const midX = textWidth * 0.5;
+              const midY = 3;
+              return (
+                <span key={i} className="relative inline-block" style={{ paddingLeft: '2px', paddingRight: '2px' }}>
+                  <span className="text-white relative z-10">{part}</span>
+                  <motion.svg
+                    className="absolute bottom-0 left-0 pointer-events-none"
+                    width={textWidth}
+                    height="12"
+                    style={{ overflow: 'visible', marginBottom: '-3px' }}
+                    viewBox={`0 0 ${textWidth} 12`}
+                  >
+                    <motion.path
+                      d={`M 0 8 Q ${midX} ${midY} ${textWidth} 8`}
+                      fill="none"
+                      strokeWidth="3"
+                      stroke="white"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeOpacity="0.9"
+                      initial={{ pathLength: 0, opacity: 0 }}
+                      animate={{ pathLength: 1, opacity: 0.9 }}
+                      transition={{
+                        pathLength: { duration: 0.6, ease: [0.43, 0.13, 0.23, 0.96] },
+                        opacity: { duration: 0.3 }
+                      }}
+                    />
+                  </motion.svg>
+                </span>
+              );
+            }
+            return <span key={i}>{part}</span>;
+          })}
+        </>
+      );
+    };
+
+    const detectedEmotion = React.useMemo(() => {
+       if (!value) return null;
+       // Find the last typed emotion to show its definition
+       // Or find all? Just showing one is cleaner.
+       // Let's find the longest match
+       const sortedEmotions = [...emotionsData].sort((a, b) => b.emotion.length - a.emotion.length);
+       return sortedEmotions.find(e => new RegExp(`\\b${e.emotion}\\b`, 'i').test(value));
+    }, [value, emotionsData]);
 
     const { adjustHeight } = useAutoResizeTextarea({
       minHeight,
@@ -176,7 +248,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
       : null;
     // Get the selected emotion name if an emotion is selected
     const selectedEmotion = selectedTool?.startsWith('emotion-') 
-      ? emotionsList.find(e => e.toLowerCase() === selectedTool.replace('emotion-', ''))
+      ? emotionsData.find(e => e.emotion.toLowerCase() === selectedTool.replace('emotion-', ''))?.emotion
       : null;
 
     return (
@@ -187,6 +259,24 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
         className
       )}>
         <div className="relative">
+          {/* Overlay for highlighting emotion terms - only show when there's text */}
+          {value && (
+            <div 
+              aria-hidden="true"
+              className={cn(
+                "absolute inset-0 w-full bg-transparent p-3 pointer-events-none",
+                "whitespace-pre-wrap wrap-break-word overflow-hidden",
+                "text-sm leading-normal font-sans text-white"
+              )}
+              style={{ 
+                minHeight: '48px',
+                wordBreak: 'break-word'
+              }}
+            >
+              {renderHighlightedText(value)}
+            </div>
+          )}
+          
           <textarea
             ref={internalTextareaRef}
             rows={1}
@@ -200,11 +290,16 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
             }}
             placeholder=""
             disabled={submitted}
-            className={cn(
-              "w-full resize-none border-0 bg-transparent p-3 text-white",
-              "placeholder:text-white/50 focus:ring-0 focus-visible:outline-none",
-              "min-h-12 no-scrollbar"
-            )}
+              className={cn(
+                "relative z-10 w-full resize-none border-0 bg-transparent p-3",
+                "placeholder:text-white/50 focus:ring-0 focus-visible:outline-none",
+                "min-h-12 no-scrollbar",
+                "text-sm leading-normal font-sans"
+              )}
+            style={{ 
+              color: value ? 'transparent' : 'inherit',
+              caretColor: 'white'
+            }}
             {...props}
           />
           {!value && !submitted && (
@@ -310,20 +405,31 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                       </button>
                       <div className="h-px bg-white/10 my-1" />
                       <div className="max-h-48 overflow-y-auto genres-scrollbar">
-                        {emotionsList.map((emotion) => (
-                          <button
-                            key={emotion}
-                            onClick={() => {
-                              setSelectedTool(`emotion-${emotion.toLowerCase()}`);
-                              setShowEmotionSubmenu(false);
-                              setIsPopoverOpen(false);
-                            }}
-                            className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors"
-                          >
-                            <Heart className="h-3.5 w-3.5" />
-                            <span>{emotion}</span>
-                          </button>
-                        ))}
+                        {emotionsData.length === 0 ? (
+                           <div className="p-3 text-center">
+                             <p className="text-[10px] text-white/40 mb-2">No custom emotions found.</p>
+                             <p className="text-[10px] text-white/40">Add them in Personal settings.</p>
+                           </div>
+                        ) : (
+                          emotionsData.map((e) => (
+                            <button
+                              key={e.emotion}
+                              onClick={() => {
+                                const toolValue = `emotion-${e.emotion.toLowerCase()}`;
+                                console.log('🎭 [EMOTION DEBUG] Emotion clicked:', e.emotion);
+                                console.log('  - toolValue:', toolValue);
+                                console.log('  - emotionsData at click:', emotionsData);
+                                setSelectedTool(toolValue);
+                                setIsPopoverOpen(false);
+                                setShowEmotionSubmenu(false);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors"
+                            >
+                              <Heart className="h-3.5 w-3.5" />
+                              <span>{e.emotion}</span>
+                            </button>
+                          ))
+                        )}
                       </div>
                     </div>
                   ) : (

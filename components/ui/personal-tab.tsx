@@ -4,7 +4,9 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { TrackList } from "@/components/ui/track-list";
 import { DragCards } from "@/components/ui/drag-cards";
+import { EmotionSettings } from "@/components/ui/emotion-settings";
 import type { SpotifyTrack } from "@/types";
+import { UserButton } from "@clerk/nextjs";
 
 interface LikedTrack {
   id: number;
@@ -12,6 +14,8 @@ interface LikedTrack {
   track_name: string;
   track_artist: string;
   track_image_url: string | null;
+  preview_url: string | null;
+  duration_ms: number | null;
   created_at: string | null;
 }
 
@@ -55,9 +59,9 @@ export function PersonalTab() {
           name: '',
           images: track.track_image_url ? [{ url: track.track_image_url }] : [],
         },
-        preview_url: null,
+        preview_url: track.preview_url || null,
         external_url: `https://open.spotify.com/track/${track.track_id}`,
-        duration_ms: 0,
+        duration_ms: track.duration_ms || 0,
         popularity: 0,
       }));
 
@@ -128,7 +132,26 @@ export function PersonalTab() {
         transition={{ duration: 0.4 }}
         className="max-w-4xl mx-auto relative z-20"
       >
-        <h2 className="text-3xl font-bold text-white mb-6">Your Liked Tracks</h2>
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-3xl font-bold text-white">Personal Hub</h2>
+          <div className="scale-125">
+            <UserButton 
+              afterSignOutUrl="/" 
+              appearance={{
+                elements: {
+                  avatarBox: "w-12 h-12 border-2 border-white/20 hover:border-white/40 transition-colors",
+                  userButtonTrigger: "focus:shadow-none focus:outline-none",
+                  userButtonPopoverCard: "bg-black/90 border border-white/10 shadow-2xl backdrop-blur-xl",
+                  userButtonPopoverFooter: "hidden"
+                }
+              }} 
+            />
+          </div>
+        </div>
+
+        <EmotionSettings />
+
+        <h3 className="text-2xl font-bold text-white mb-6">Your Liked Tracks</h3>
         
         {loading && (
           <div className="flex items-center justify-center py-20">
@@ -152,7 +175,7 @@ export function PersonalTab() {
           <div className="flex flex-col gap-8">
             {/* Draggable album art cards section */}
             <div className="relative w-full h-[400px] bg-white/5 rounded-3xl overflow-hidden border border-white/10">
-              <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20 z-20 pointer-events-none" />
+              <div className="absolute inset-0 bg-linear-to-b from-transparent to-black/20 z-20 pointer-events-none" />
               <DragCards tracks={likedTracks} />
               <div className="absolute bottom-4 left-6 z-20">
                 <p className="text-white/40 text-sm font-medium uppercase tracking-wider">Interactive Gallery</p>
@@ -167,9 +190,14 @@ export function PersonalTab() {
               </div>
               <TrackList
                 tracks={likedTracks}
-                likedTrackIds={likedTrackIds}
-                onLike={handleLike}
-                onDislike={handleDislike}
+                likedTracks={likedTrackIds}
+                onToggleLike={(trackId) => {
+                  if (likedTrackIds.has(trackId)) {
+                    handleDislike(trackId);
+                  } else {
+                    handleLike(trackId);
+                  }
+                }}
               />
             </div>
           </div>
