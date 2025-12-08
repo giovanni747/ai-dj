@@ -1,6 +1,8 @@
 """
 Rate limiter and request queue for Groq API
-Ensures we stay within Groq's limits: 30 RPM, 6000 TPM
+Ensures we stay within Groq's limits:
+- Free tier: 30 RPM, 14,400 TPM (llama-3.1-8b-instant)
+- Free tier: 30 RPM, 30,000 TPM (llama-3.3-70b-versatile)
 """
 
 import time
@@ -13,10 +15,10 @@ import functools
 class RateLimiter:
     """
     Rate limiter for Groq API requests
-    Limits: 30 requests per minute, 6000 tokens per minute
+    Limits: 30 requests per minute, 14,400 tokens per minute (free tier)
     """
     
-    def __init__(self, max_requests_per_minute: int = 30, max_tokens_per_minute: int = 6000):
+    def __init__(self, max_requests_per_minute: int = 30, max_tokens_per_minute: int = 14400):
         self.max_rpm = max_requests_per_minute
         self.max_tpm = max_tokens_per_minute
         
@@ -111,7 +113,8 @@ class RateLimiter:
 
 
 # Global rate limiter instance
-groq_rate_limiter = RateLimiter(max_requests_per_minute=30, max_tokens_per_minute=6000)
+# Using Groq free tier limits: 30 RPM, 14,400 TPM for llama-3.1-8b-instant
+groq_rate_limiter = RateLimiter(max_requests_per_minute=30, max_tokens_per_minute=14400)
 
 
 def rate_limited(estimated_tokens: int = 500):

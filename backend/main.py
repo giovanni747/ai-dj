@@ -211,50 +211,57 @@ _translation_cache = {}
 
 def quick_language_detect(lyrics: str) -> Optional[str]:
     """
-    Fast language detection using simple heuristics before LLM call.
-    Returns language code if confident, None if needs LLM detection.
+    Fast language detection using simple heuristics before API call.
+    Returns language code if confident, None if needs API detection.
     
-    More strict criteria to avoid false positives on English songs with few foreign words.
+    Uses balanced criteria: strict enough to avoid false positives, but catches Spanish/Portuguese songs.
     """
-    if not lyrics or len(lyrics) < 100:  # Increased minimum length
+    if not lyrics or len(lyrics) < 50:  # Lower threshold to catch shorter lyrics
         return None
     
-    # Get first 300 words for analysis (increased from 200)
-    words = lyrics.lower().split()[:300]
+    # Get first 400 words for analysis (more context)
+    words = lyrics.lower().split()[:400]
     sample = ' '.join(words)
     total_words = len(words)
     
-    # Common indicators for different languages
-    spanish_indicators = ['que', 'con', 'por', 'para', 'esta', 'está', 'son', 'del', 'una', 'las', 'los', 'el', 'la', 'mi', 'tu', 'sus', 'como', 'pero', 'cuando', 'donde']
-    french_indicators = ['que', 'de', 'la', 'le', 'et', 'les', 'des', 'un', 'une', 'est', 'dans', 'pour', 'pas', 'ce', 'qui', 'il', 'elle', 'nous', 'vous', 'sont']
-    portuguese_indicators = ['que', 'de', 'para', 'com', 'uma', 'os', 'das', 'pelo', 'pela', 'não', 'mais', 'meu', 'teu', 'seu', 'está', 'são', 'foi', 'porque', 'quando', 'onde']
+    if total_words < 20:  # Too short to analyze
+        return None
+    
+    # Expanded indicators for better detection
+    spanish_indicators = ['que', 'con', 'por', 'para', 'esta', 'está', 'son', 'del', 'una', 'las', 'los', 'el', 'la', 'mi', 'tu', 'sus', 'como', 'pero', 'cuando', 'donde', 'tú', 'más', 'muy', 'bien', 'también', 'mundo', 'vida', 'amor', 'corazón', 'sé', 'quiero', 'puedo', 'gusta', 'dame', 'tengo', 'eres', 'estoy', 'estás']
+    french_indicators = ['que', 'de', 'la', 'le', 'et', 'les', 'des', 'un', 'une', 'est', 'dans', 'pour', 'pas', 'ce', 'qui', 'il', 'elle', 'nous', 'vous', 'sont', 'avec', 'tout', 'bien', 'mon', 'ma', 'mes', 'ton', 'ta', 'tes']
+    portuguese_indicators = ['que', 'de', 'para', 'com', 'uma', 'os', 'das', 'pelo', 'pela', 'não', 'mais', 'meu', 'teu', 'seu', 'está', 'são', 'foi', 'porque', 'quando', 'onde', 'você', 'muito', 'bem', 'também', 'mundo', 'vida', 'amor', 'coração', 'posso', 'quero']
     
     # Count matches (case-insensitive, whole words)
-    spanish_count = sum(1 for word in spanish_indicators if f' {word} ' in f' {sample} ')
-    french_count = sum(1 for word in french_indicators if f' {word} ' in f' {sample} ')
-    portuguese_count = sum(1 for word in portuguese_indicators if f' {word} ' in f' {sample} ')
+    spanish_count = sum(1 for word in spanish_indicators if f' {word} ' in f' {sample} ' or sample.startswith(word + ' ') or sample.endswith(' ' + word))
+    french_count = sum(1 for word in french_indicators if f' {word} ' in f' {sample} ' or sample.startswith(word + ' ') or sample.endswith(' ' + word))
+    portuguese_count = sum(1 for word in portuguese_indicators if f' {word} ' in f' {sample} ' or sample.startswith(word + ' ') or sample.endswith(' ' + word))
     
-    # Calculate percentage of foreign words (more strict)
+    # Calculate percentage of foreign words
     spanish_percentage = (spanish_count / total_words * 100) if total_words > 0 else 0
     french_percentage = (french_count / total_words * 100) if total_words > 0 else 0
     portuguese_percentage = (portuguese_count / total_words * 100) if total_words > 0 else 0
     
-    # Only mark as non-English if:
-    # 1. High absolute count (>10 matches) AND
-    # 2. High percentage (>15% of words are foreign indicators)
-    if spanish_count > 10 and spanish_percentage > 15 and spanish_count > french_count and spanish_count > portuguese_count:
+    # Stricter thresholds to avoid false positives on bilingual songs:
+    # Require BOTH a minimum count AND a minimum percentage
+    # This prevents bilingual songs (like "I Like It") from being mis-classified
+    # Spanish detection (most common for this use case)
+    if (spanish_count > 10 and spanish_percentage > 12) and spanish_count > french_count and spanish_count > portuguese_count:
         return "es"
-    elif portuguese_count > 10 and portuguese_percentage > 15 and portuguese_count > spanish_count:
+    # Portuguese detection
+    elif (portuguese_count > 10 and portuguese_percentage > 12) and portuguese_count > spanish_count:
         return "pt"
-    elif french_count > 10 and french_percentage > 15 and french_count > spanish_count:
+    # French detection
+    elif (french_count > 10 and french_percentage > 12) and french_count > spanish_count:
         return "fr"
     
-    return None  # Need LLM detection (or likely English)
+    return None  # Need API detection (or likely English)
 
 def batch_detect_and_translate(lyrics_list: list) -> list:
     """
-    Batch detect languages and translate non-English lyrics in ONE API call.
-    This replaces sequential detect->translate calls for massive speedup.
+    Translate lyrics using DeepL API with batch processing (high quality, fast).
+    Groups lyrics by language and makes batch API calls for better performance.
+    Falls back to Groq LLM if DeepL fails.
     
     Args:
         lyrics_list: List of lyrics strings to process
@@ -265,158 +272,186 @@ def batch_detect_and_translate(lyrics_list: list) -> list:
     if not lyrics_list:
         return []
     
-    from groq import Groq
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    # DeepL API configuration
+    deepl_api_key = os.getenv("DEEPL_API_KEY")
+    if not deepl_api_key:
+        print("⚠️  DEEPL_API_KEY not found - using Groq LLM fallback only")
+        use_deepl = False
+    else:
+        use_deepl = True
+        # DeepL API endpoint (use free tier by default, can use pro with api.deepl.com)
+        deepl_base_url = os.getenv("DEEPL_API_URL", "https://api-free.deepl.com/v2")
+        translate_url = f"{deepl_base_url}/translate"
     
-    # Quick pre-check with heuristics
-    pre_detected = [quick_language_detect(lyrics) for lyrics in lyrics_list]
+    # Step 1: Pre-detect all languages using heuristics
+    print(f"🔍 Pre-detecting languages for {len(lyrics_list)} lyrics...")
+    language_groups = {
+        'en': [],      # English (no translation needed)
+        'es': [],      # Spanish
+        'pt': [],      # Portuguese
+        'fr': [],      # French
+        'unknown': []  # Unknown (will use DeepL auto-detect)
+    }
     
-    # Build batch prompt for combined detection + translation
-    # Truncate to 1200 chars for faster, more reliable translation
-    # (captures chorus + key verses while keeping batch size manageable)
-    prompt_parts = []
-    truncated_lyrics = []
+    # Map indices for later reconstruction
+    lyrics_metadata = []  # [(index, lyrics, detected_lang), ...]
     
-    for i, (lyrics, pre_lang) in enumerate(zip(lyrics_list, pre_detected)):
-        # Truncate to 1200 chars at word boundary (keeps key content, faster processing)
-        if len(lyrics) > 1200:
-            # Find the last space before 1200 chars to avoid cutting mid-word
-            truncate_point = lyrics.rfind(' ', 0, 1200)
-            # If no space found (unlikely), just truncate at 1200
-            lyrics_truncated = lyrics[:truncate_point] if truncate_point > 0 else lyrics[:1200]
+    for i, lyrics in enumerate(lyrics_list):
+        detected_lang = quick_language_detect(lyrics)
+        if not detected_lang:
+            detected_lang = 'unknown'
+        
+        lyrics_metadata.append((i, lyrics, detected_lang))
+        language_groups[detected_lang].append((i, lyrics))
+        
+        if detected_lang and detected_lang != 'unknown':
+            print(f"    🔍 [Lyrics {i+1}]: Heuristic detected: {detected_lang}")
         else:
-            lyrics_truncated = lyrics
-        
-        truncated_lyrics.append(lyrics_truncated)
-        
-        if pre_lang:
-            # Pre-detected language
-            prompt_parts.append(f'\n=== Text {i+1} ===\nLanguage: {pre_lang}\n{lyrics_truncated}')
-        else:
-            # Need LLM to detect
-            prompt_parts.append(f'\n=== Text {i+1} ===\n{lyrics_truncated}')
+            print(f"    🔍 [Lyrics {i+1}]: Unknown language (will use DeepL auto-detect)")
     
-    # Combined detection and translation prompt
-    prompt = f"""For each text below, detect the language and translate to English if non-English.
-
-CRITICAL RULES:
-1. Preserve ALL line breaks, spacing, and formatting EXACTLY
-2. If language is English (en), return the EXACT same text
-3. If non-English, translate COMPLETELY while preserving structure
-4. Do NOT skip lines or return partial translations
-
-Return JSON format:
-{{"results": [
-  {{"index": 1, "language": "es", "translated": "English translation with preserved line breaks"}},
-  {{"index": 2, "language": "en", "translated": "exact same English text"}},
-  ...
-]}}
-
-Language codes: es (Spanish), en (English), fr (French), pt (Portuguese), it (Italian), de (German)
-
-Texts to process:
-{chr(10).join(prompt_parts)}
-
-Return ONLY the JSON object."""
+    # Initialize output array with placeholders
+    output = [None] * len(lyrics_list)
     
-    try:
-        # Calculate dynamic max_tokens based on TRUNCATED input length
-        total_chars = sum(len(l) for l in truncated_lyrics)
-        estimated_tokens = int(total_chars * 2.5)  # Translation can be longer, increased multiplier
-        max_tokens = max(4000, min(estimated_tokens, 8000))  # Increased range: 4k-8k tokens to prevent truncation
-        
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Fast model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,  # Lower for more consistent formatting
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"}
-        )
-        
-        response_text = response.choices[0].message.content
-        
-        # Try to parse JSON, with fallback for partial/incomplete JSON
-        try:
-            result_json = json.loads(response_text)
-        except json.JSONDecodeError as json_err:
-            # Try to extract partial JSON if response was truncated
-            print(f"    ⚠️  JSON parse error, attempting to extract partial results: {json_err}")
-            # Try to find and parse just the results array
-            import re
-            results_match = re.search(r'"results"\s*:\s*\[(.*?)\]', response_text, re.DOTALL)
-            if results_match:
-                try:
-                    # Try to reconstruct valid JSON from partial response
-                    partial_json = '{"results": [' + results_match.group(1) + ']}'
-                    result_json = json.loads(partial_json)
-                    print(f"    ✅ Successfully parsed partial JSON")
-                except:
-                    # If that fails, try to extract individual result objects
-                    result_objects = re.findall(r'\{"index":\s*(\d+),\s*"language":\s*"([^"]+)",\s*"translated":\s*"(.*?)"\}', response_text, re.DOTALL)
-                    if result_objects:
-                        results = []
-                        for idx, lang, trans in result_objects:
-                            # Clean up translation text (remove escape sequences)
-                            trans_clean = trans.replace('\\n', '\n').replace('\\"', '"').replace('\\\'', "'")
-                            results.append({"index": int(idx), "language": lang, "translated": trans_clean})
-                        result_json = {"results": results}
-                        print(f"    ✅ Extracted {len(results)} partial results from incomplete JSON")
-                    else:
-                        raise json_err
+    # Step 2: Handle English lyrics (no translation needed)
+    if language_groups['en']:
+        print(f"✅ Skipping {len(language_groups['en'])} English lyrics (no translation needed)")
+        for idx, lyrics in language_groups['en']:
+            output[idx] = (lyrics, 'en')
+    
+    # Step 3: Batch translate by language group using DeepL
+    if use_deepl:
+        for lang, lyrics_group in language_groups.items():
+            if lang == 'en' or not lyrics_group:
+                continue
+            
+            # Prepare batch for this language
+            indices = [item[0] for item in lyrics_group]
+            texts = [item[1] for item in lyrics_group]
+            
+            if lang == 'unknown':
+                source_lang = "auto"  # Let DeepL detect
+                print(f"\n🌐 Batch translating {len(texts)} lyrics with auto-detection...")
             else:
-                raise json_err
-        
-        results = result_json.get("results", [])
+                source_lang = lang.upper()
+                print(f"\n🌐 Batch translating {len(texts)} {lang.upper()} lyrics...")
             
-        # Map results back to original list
-        output = []
-        for i, (full_lyrics, truncated) in enumerate(zip(lyrics_list, truncated_lyrics)):
-            # Find result for this index
-            result = next((r for r in results if r.get("index") == i+1), None)
-            
-            if result:
-                lang = result.get("language", "en").lower().strip()
-                translated_preview = result.get("translated", "").strip()
+            try:
+                # DeepL batch API request
+                deepl_headers = {
+                    "Authorization": f"DeepL-Auth-Key {deepl_api_key}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
                 
-                # Validate translation
-                if not translated_preview:  # Empty translation
-                    print(f"    ⚠️  Translation {i+1} empty, using original")
-                    output.append((full_lyrics, lang if lang else "en"))
-                elif lang == "en":
-                    # English - use original full lyrics to preserve exact formatting
-                    output.append((full_lyrics, "en"))
-                elif len(translated_preview) < 100:  # Translation too short (likely failed)
-                    print(f"    ⚠️  Translation {i+1} too short ({len(translated_preview)} chars), using original")
-                    output.append((full_lyrics, lang))
+                # DeepL accepts multiple texts as repeated 'text' parameters
+                deepl_params = [
+                    ("source_lang", source_lang if source_lang != "auto" else ""),
+                    ("target_lang", "EN"),
+                    ("preserve_formatting", "1")
+                ]
+                # Add each text as a separate 'text' parameter
+                for text in texts:
+                    deepl_params.append(("text", text))
+                
+                translate_response = requests.post(
+                    translate_url,
+                    data=deepl_params,
+                    headers=deepl_headers,
+                    timeout=30  # Longer timeout for batch
+                )
+                
+                if translate_response.ok:
+                    result = translate_response.json()
+                    translations = result.get('translations', [])
+                    
+                    if len(translations) == len(texts):
+                        # Successfully translated all texts in batch
+                        for i, (idx, original_lyrics) in enumerate(zip(indices, texts)):
+                            translated_text = translations[i].get('text', original_lyrics)
+                            detected_source_lang = translations[i].get('detected_source_language', lang)
+                            
+                            # Check if detected as English
+                            if detected_source_lang and detected_source_lang.lower() == 'en':
+                                output[idx] = (original_lyrics, 'en')
+                                print(f"    ✅ [Lyrics {idx+1}]: DeepL detected English (no translation needed)")
+                            elif translated_text != original_lyrics and len(translated_text) > 50:
+                                output[idx] = (translated_text, detected_source_lang.lower() if detected_source_lang else lang)
+                                print(f"    ✅ [Lyrics {idx+1}]: {detected_source_lang or lang} → en (translated via DeepL, {len(translated_text)} chars)")
+                            else:
+                                # Translation failed or returned same text
+                                output[idx] = (original_lyrics, lang)
+                                print(f"    ⚠️  [Lyrics {idx+1}]: Translation returned same text, keeping original")
+                        
+                        print(f"✅ Batch translated {len(translations)} lyrics successfully")
+                    else:
+                        print(f"⚠️  Batch translation count mismatch: got {len(translations)}, expected {len(texts)}")
+                        # Fall back to individual processing
+                        for idx, lyrics in zip(indices, texts):
+                            output[idx] = (lyrics, lang)
                 else:
-                    # Non-English with valid translation
-                    # Use the translated preview (it has the key content: chorus + verses)
-                    output.append((translated_preview, lang))
-            else:
-                # Fallback - no result found, use pre-detected language if available
-                pre_lang = pre_detected[i] if i < len(pre_detected) else None
-                if pre_lang:
-                    print(f"    ⚠️  No result for lyrics {i+1}, using pre-detected language: {pre_lang}")
-                    output.append((full_lyrics, pre_lang))
+                    error_text = translate_response.text[:200] if translate_response.text else "No error message"
+                    print(f"⚠️  Batch DeepL API error (status {translate_response.status_code}): {error_text}")
+                    # Mark for fallback processing
+                    for idx, lyrics in zip(indices, texts):
+                        output[idx] = None  # Will be handled by fallback
+                        
+            except Exception as e:
+                print(f"⚠️  Batch DeepL request failed: {str(e)[:100]}")
+                # Mark for fallback processing
+                for idx, lyrics in zip(indices, texts):
+                    output[idx] = None  # Will be handled by fallback
+    
+    # Step 4: Handle any failures with Groq LLM fallback
+    print(f"\n🔄 Checking for failed translations...")
+    failed_count = sum(1 for item in output if item is None)
+    
+    if failed_count > 0:
+        print(f"⚠️  Found {failed_count} failed translations, using Groq LLM fallback...")
+        from groq import Groq
+        groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        
+        for i, item in enumerate(output):
+            if item is None:
+                # Find original lyrics and detected language
+                original_idx, original_lyrics, detected_lang = lyrics_metadata[i]
+                
+                if detected_lang == 'en' or detected_lang == 'unknown':
+                    detected_lang = quick_language_detect(original_lyrics) or 'en'
+                
+                if detected_lang != 'en':
+                    print(f"    🔄 [Lyrics {i+1}]: Trying Groq LLM for {detected_lang}...")
+                    try:
+                        # Truncate for Groq token limits
+                        lyrics_for_groq = original_lyrics[:1500] if len(original_lyrics) > 1500 else original_lyrics
+                        
+                        translation_prompt = f"""Translate the following {detected_lang} lyrics to English. Preserve the formatting, line breaks, and structure. Only return the translated text, nothing else.
+
+{lyrics_for_groq}"""
+                        
+                        groq_response = groq_client.chat.completions.create(
+                            model="llama-3.1-8b-instant",
+                            messages=[{"role": "user", "content": translation_prompt}],
+                            temperature=0.3,
+                            max_tokens=2000
+                        )
+                        
+                        translated_text = groq_response.choices[0].message.content.strip()
+                        
+                        if translated_text and translated_text != original_lyrics and len(translated_text) > 50:
+                            if len(original_lyrics) > 1500:
+                                translated_text = translated_text + "\n\n[... (translation of first part)]"
+                            output[i] = (translated_text, detected_lang)
+                            print(f"    ✅ [Lyrics {i+1}]: {detected_lang} → en (Groq LLM, {len(translated_text)} chars)")
+                        else:
+                            output[i] = (original_lyrics, detected_lang)
+                            print(f"    ⚠️  [Lyrics {i+1}]: Groq LLM failed, keeping original")
+                    except Exception as groq_error:
+                        output[i] = (original_lyrics, detected_lang)
+                        print(f"    ❌ [Lyrics {i+1}]: Groq LLM error: {str(groq_error)[:50]}, keeping original")
                 else:
-                    print(f"    ⚠️  No result for lyrics {i+1}, assuming English")
-                    output.append((full_lyrics, "en"))
-        
-        return output
-        
-    except Exception as e:
-        print(f"    ⚠️  Batch translation error: {e}")
-        # Use pre-detected languages as fallback instead of marking everything as English
-        output = []
-        for i, (lyrics, pre_lang) in enumerate(zip(lyrics_list, pre_detected)):
-            if pre_lang:
-                # Use pre-detected language (keep original lyrics since translation failed)
-                output.append((lyrics, pre_lang))
-                print(f"    ⚠️  Lyrics {i+1}: Using pre-detected language '{pre_lang}' (translation API failed)")
-            else:
-                # Assume English if no pre-detection
-                output.append((lyrics, "en"))
-        return output
+                    output[i] = (original_lyrics, 'en')
+                    print(f"    ✅ [Lyrics {i+1}]: English (fallback)")
+    
+    return output
 
 def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
     """
@@ -1125,6 +1160,71 @@ def api_status():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# === USER EMOTIONS ENDPOINTS ===
+
+@app.route('/user_emotions', methods=['GET'])
+def get_user_emotions():
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    try:
+        try:
+            clerk_id = get_clerk_user_id()
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 401
+            
+        emotions = chat_db.get_user_emotions(clerk_id)
+        return jsonify({"emotions": emotions})
+    except Exception as e:
+        print(f"Error fetching user emotions: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/user_emotions', methods=['POST'])
+def save_user_emotion():
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    try:
+        try:
+            clerk_id = get_clerk_user_id()
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 401
+            
+        data = request.json
+        emotion = data.get('emotion')
+        definition = data.get('definition')
+        
+        if not emotion or not definition:
+            return jsonify({"error": "Emotion and definition are required"}), 400
+            
+        emotion_id = chat_db.save_user_emotion(clerk_id, emotion, definition)
+        
+        if emotion_id:
+            return jsonify({"success": True, "id": emotion_id})
+        else:
+            return jsonify({"error": "Failed to save emotion"}), 500
+    except Exception as e:
+        print(f"Error saving user emotion: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/user_emotions/<int:emotion_id>', methods=['DELETE'])
+def delete_user_emotion(emotion_id):
+    if not chat_db:
+        return jsonify({"error": "Database not configured"}), 500
+    try:
+        try:
+            clerk_id = get_clerk_user_id()
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 401
+            
+        success = chat_db.delete_user_emotion(clerk_id, emotion_id)
+        
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Failed to delete emotion or not found"}), 404
+    except Exception as e:
+        print(f"Error deleting user emotion: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/dj_recommend', methods=['POST'])
 def dj_recommend():
     """Get AI DJ recommendations: LLM recommends songs, then we fetch from Spotify"""
@@ -1138,6 +1238,23 @@ def dj_recommend():
         data = request.json
         user_message = data.get('message', 'recommend me some great songs')
         selected_tool = data.get('tool')
+        
+        # Check for custom emotion definition
+        if selected_tool and selected_tool.startswith('emotion-'):
+            try:
+                clerk_id = get_clerk_user_id()
+                emotion_name = selected_tool.replace('emotion-', '').lower()
+                # Fetch user definitions
+                emotions = chat_db.get_user_emotions(clerk_id)
+                # Find matching emotion (case-insensitive)
+                definition = next((e['definition'] for e in emotions if e['emotion'].lower() == emotion_name), None)
+                
+                if definition:
+                    print(f"✅ Found custom definition for emotion '{emotion_name}': {definition}")
+                    # Append definition to message
+                    user_message = f"{user_message} (Context: I am feeling {emotion_name}. My personal definition of this emotion is: {definition})"
+            except Exception as e:
+                print(f"⚠️ Error checking custom emotion definition: {e}")
         
         # Get weather data if weather tool is selected
         weather_data = None
@@ -1359,9 +1476,9 @@ def dj_recommend():
         tracks = []
         found_count = 0
         
-        print(f"\n=== SPOTIFY SEARCH (keeping duplicates, will select best 5) ===")
+        print(f"\n=== SPOTIFY SEARCH (keeping duplicates, will select best 3) ===")
         if previously_recommended_track_ids:
-            print(f"ℹ️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - duplicates allowed (will select best 5)")
+            print(f"ℹ️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - duplicates allowed (will select best 3)")
         else:
             print(f"ℹ️  No similar prompts found - all recommendations will be new")
         print(f"================================================\n")
@@ -1639,9 +1756,9 @@ def dj_recommend():
         
         # ⏱️ TIMING: Lyrics fetching (now using BATCH translation)
         lyrics_fetch_start = time.time()
-        # Fetch lyrics for all tracks with BATCH translation (should be up to 6, will select top 5 later)
+        # Fetch lyrics for all tracks with BATCH translation (should be up to 3, will select top 3 later)
         print(f"\n=== FETCHING LYRICS & BATCH TRANSLATION + SCORING ===")
-        print(f"Processing {len(tracks)} tracks (will select best 5)")
+        print(f"Processing {len(tracks)} tracks (will select best 3)")
         
         # Step 1: Fetch all lyrics from Genius in parallel (no translation yet)
         def fetch_genius_lyrics(track_data):
@@ -1708,12 +1825,11 @@ def dj_recommend():
             translation_results = batch_detect_and_translate(lyrics_to_translate)
             
             # Apply results back to tracks
-            for idx, (translated_lyrics, detected_lang) in zip(lyrics_indices, translation_results):
+            # lyrics_indices and translation_results are in the same order as lyrics_to_translate
+            for i, (idx, (translated_lyrics, detected_lang)) in enumerate(zip(lyrics_indices, translation_results)):
                 track = tracks_with_raw_lyrics[idx]
-                original_lyrics = lyrics_to_translate[lyrics_indices.index(idx)]
+                original_lyrics = lyrics_to_translate[i]  # Use enumerate index, not lyrics_indices.index(idx)
                 
-                # ALWAYS store the original fetched lyrics
-                track['lyrics_original'] = original_lyrics
                 track['lyrics_language'] = detected_lang
                 
                 # For English lyrics, both will be the same (so toggle button won't show)
@@ -1725,17 +1841,29 @@ def dj_recommend():
                     track['lyrics_original'] = None  # No original needed for English
                     print(f"    ✅ [{track['name']}]: English (no translation needed)")
                 else:
-                    # Non-English song - use translated version for lyrics field
-                    track['lyrics'] = translated_lyrics
+                    # Non-English song - check if translation actually succeeded
                     was_translated = translated_lyrics != original_lyrics
-                    non_english_tracks.append({
-                        'name': track['name'],
-                        'artist': track['artist'],
+                    
+                    if was_translated:
+                        # Translation succeeded - store both original and translated
+                        track['lyrics_original'] = original_lyrics
+                        track['lyrics'] = translated_lyrics
+                        print(f"    ✅ [{track['name']}]: {detected_lang} → en (translated)")
+                    else:
+                        # Translation failed (API unreachable) but language is non-English
+                        # Still set lyrics_original so EN toggle shows (user can see original lyrics)
+                        # The toggle won't switch to English (since translation failed), but original will be available
+                        track['lyrics'] = original_lyrics  # Keep original as main lyrics
+                        track['lyrics_original'] = original_lyrics  # Set to same so toggle shows original
+                        print(f"    ⚠️  [{track['name']}]: {detected_lang} detected, but translation API failed (keeping original, EN toggle will show original)")
+                    
+                        non_english_tracks.append({
+                            'name': track['name'],
+                            'artist': track['artist'],
                         'language': detected_lang,
                         'was_translated': was_translated
                     })
-                    print(f"    ✅ [{track['name']}]: {detected_lang} → en {'(translated)' if was_translated else '(kept original)'}")
-        
+                    
         tracks_with_lyrics = tracks_with_raw_lyrics
         
         lyrics_fetch_time = time.time() - lyrics_fetch_start
@@ -1811,22 +1939,15 @@ def dj_recommend():
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
         
         # Always select exactly 5 tracks (remove worst ones if we have more than 5)
-        # If we have duplicates, they'll be included, but worst one gets removed
-        selected_tracks = tracks_with_scores[:5]
-        
-        # Ensure we have exactly 5 tracks
-        if len(selected_tracks) < 5 and len(tracks_with_scores) > len(selected_tracks):
-            # If we don't have enough, try to take more (shouldn't happen with 6 requested)
-            print(f"⚠️  Only found {len(selected_tracks)} tracks, needed 5. Taking all available.")
-            selected_tracks = tracks_with_scores[:min(5, len(tracks_with_scores))]
-        
-        # Log which tracks were selected and which were removed
-        if len(tracks_with_scores) > 5:
-            removed_count = len(tracks_with_scores) - 5
-            print(f"\n✅ Selected top 5 tracks (removed {removed_count} lowest scoring track(s))")
+        # Always select exactly 3 tracks (remove worst ones if we have more than 3)
+        if len(tracks_with_scores) > 3:
+            selected_tracks = tracks_with_scores[:3]
+            removed_count = len(tracks_with_scores) - 3
+            print(f"\n✅ Selected top 3 tracks (removed {removed_count} lowest scoring track(s))")
             if removed_count > 0:
-                print(f"   Removed tracks: {', '.join([t['name'] for t in tracks_with_scores[5:]])}")
+                print(f"   Removed tracks: {', '.join([t['name'] for t in tracks_with_scores[3:]])}")
         else:
+            selected_tracks = tracks_with_scores[:min(3, len(tracks_with_scores))]
             print(f"\n✅ Selected {len(selected_tracks)} tracks (all available)")
         
         for i, track in enumerate(selected_tracks, 1):
@@ -1836,7 +1957,7 @@ def dj_recommend():
         explanations_start = time.time()
         # ⏱️ TIMING: Explanations generation (parallel)
         explanations_start = time.time()
-        # Generate explanations only for the final 5 selected tracks (PARALLEL)
+        # Generate explanations only for the final 3 selected tracks (PARALLEL)
         print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS (PARALLEL) ===")
         print(f"Processing {len(selected_tracks)} tracks for explanations in parallel...")
         
@@ -2036,7 +2157,11 @@ def track_like():
     
     try:
         # Get Clerk user ID from header
-        clerk_id = get_clerk_user_id()
+        try:
+            clerk_id = get_clerk_user_id()
+        except ValueError as e:
+            print(f"⚠️  {e}")
+            return jsonify({"error": str(e)}), 401
         
         data = request.json
         track_id = data.get('track_id')
@@ -2044,6 +2169,8 @@ def track_like():
         track_artist = data.get('track_artist')
         track_image_url = data.get('track_image_url')
         highlighted_terms = data.get('highlighted_terms')  # List of highlighted terms from lyrics
+        preview_url = data.get('preview_url')  # Preview URL for track playback
+        duration_ms = data.get('duration_ms')  # Track duration in milliseconds
         
         if not track_id or not track_name or not track_artist:
             return jsonify({"error": "track_id, track_name, and track_artist are required"}), 400
@@ -2064,7 +2191,7 @@ def track_like():
             if highlighted_terms:
                 print(f"   Storing {len(highlighted_terms)} highlighted terms for track: {track_name}")
         
-        # Toggle the like (with audio features and highlighted_terms if provided)
+        # Toggle the like (with audio features, highlighted_terms, preview_url, and duration_ms if provided)
         is_liked = chat_db.toggle_track_like(
             user_id=clerk_id,  # Use Clerk ID
             track_id=track_id,
@@ -2074,7 +2201,9 @@ def track_like():
             energy=energy,
             danceability=danceability,
             valence=valence,
-            highlighted_terms=highlighted_terms
+            highlighted_terms=highlighted_terms,
+            preview_url=preview_url,
+            duration_ms=duration_ms
         )
         
         if is_liked is not None:
@@ -2200,7 +2329,11 @@ def get_liked_tracks():
     
     try:
         # Get Clerk user ID from header
-        clerk_id = get_clerk_user_id()
+        try:
+            clerk_id = get_clerk_user_id()
+        except ValueError as e:
+            print(f"⚠️  {e}")
+            return jsonify({"error": str(e)}), 401
         
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))

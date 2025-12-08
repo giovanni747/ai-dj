@@ -17,6 +17,23 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 class ChatDatabase:
     def __init__(self, db_url):
         self.db_url = db_url
+        self._has_preview_columns = None  # Cache for column existence check
+    
+    def _check_columns_exist(self, cur, table_name, column_names):
+        """Check if columns exist in the table"""
+        try:
+            # Use tuple for IN clause
+            placeholders = ','.join(['%s'] * len(column_names))
+            cur.execute(f'''
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = %s AND column_name IN ({placeholders})
+            ''', (table_name, *column_names))
+            existing = set(row[0] for row in cur.fetchall())
+            return {col: col in existing for col in column_names}
+        except Exception as e:
+            print(f"⚠️  Error checking columns: {e}")
+            return {col: False for col in column_names}
     
     def _get_connection(self):
         conn = psycopg2.connect(self.db_url)
@@ -239,7 +256,8 @@ class ChatDatabase:
     # === TRACK LIKES ===
     
     def toggle_track_like(self, user_id, track_id, track_name, track_artist, track_image_url=None, 
-                          energy=None, danceability=None, valence=None, highlighted_terms=None):
+                          energy=None, danceability=None, valence=None, highlighted_terms=None,
+                          preview_url=None, duration_ms=None):
         """
         Toggle track like (if exists, remove it; if not, add it)
         
@@ -253,6 +271,8 @@ class ChatDatabase:
             danceability: Audio feature danceability (0.0-1.0)
             valence: Audio feature valence (0.0-1.0)
             highlighted_terms: List of highlighted terms from lyrics (stored as JSONB)
+            preview_url: Optional preview URL for track playback
+            duration_ms: Optional track duration in milliseconds
         
         Returns:
             True if liked (added), False if unliked (removed)
@@ -278,15 +298,32 @@ class ChatDatabase:
                         print(f"✅ Unliked track: {track_name}")
                         return False
                     else:
-                        # Like (add) - include audio features and highlighted_terms if provided
+                        # Like (add) - include audio features, highlighted_terms, preview_url, and duration_ms if provided
                         highlighted_terms_json = json.dumps(highlighted_terms if highlighted_terms else [])
-                        cur.execute('''
-                            INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ''', (user_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms_json))
+                        
+                        # Check if preview_url and duration_ms columns exist (cache result)
+                        if self._has_preview_columns is None:
+                            column_check = self._check_columns_exist(cur, 'track_likes', ['preview_url', 'duration_ms'])
+                            self._has_preview_columns = column_check.get('preview_url', False) and column_check.get('duration_ms', False)
+                        
+                        # Use appropriate INSERT statement based on column existence
+                        if self._has_preview_columns:
+                            # New schema with preview_url and duration_ms
+                            cur.execute('''
+                                INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms, preview_url, duration_ms)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ''', (user_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms_json, preview_url, duration_ms))
+                        else:
+                            # Old schema without preview_url and duration_ms
+                            cur.execute('''
+                                INSERT INTO track_likes (clerk_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ''', (user_id, track_id, track_name, track_artist, track_image_url, energy, danceability, valence, highlighted_terms_json))
+                        
                         conn.commit()
                         terms_count = len(highlighted_terms) if highlighted_terms else 0
-                        print(f"✅ Liked track: {track_name} (energy={energy}, danceability={danceability}, valence={valence}, highlighted_terms={terms_count})")
+                        preview_info = f", preview_url={'yes' if preview_url else 'no'}, duration={duration_ms}ms" if self._has_preview_columns else ""
+                        print(f"✅ Liked track: {track_name} (energy={energy}, danceability={danceability}, valence={valence}, highlighted_terms={terms_count}{preview_info})")
                         return True
                     
         except Exception as e:
@@ -310,26 +347,59 @@ class ChatDatabase:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute('''
-                        SELECT id, track_id, track_name, track_artist, track_image_url, created_at
-                        FROM track_likes
-                        WHERE clerk_id = %s
-                        ORDER BY created_at DESC
-                        LIMIT %s OFFSET %s
-                    ''', (user_id, limit, offset))
+                    # Check if preview_url and duration_ms columns exist
+                    if self._has_preview_columns is None:
+                        column_check = self._check_columns_exist(cur, 'track_likes', ['preview_url', 'duration_ms'])
+                        self._has_preview_columns = column_check.get('preview_url', False) and column_check.get('duration_ms', False)
                     
-                    rows = cur.fetchall()
-                    tracks = []
-                    
-                    for row in rows:
-                        tracks.append({
-                            'id': row[0],
-                            'track_id': row[1],
-                            'track_name': row[2],
-                            'track_artist': row[3],
-                            'track_image_url': row[4],
-                            'created_at': row[5].isoformat() if row[5] else None
-                        })
+                    if self._has_preview_columns:
+                        # New schema with preview_url and duration_ms
+                        cur.execute('''
+                            SELECT id, track_id, track_name, track_artist, track_image_url, preview_url, duration_ms, created_at
+                            FROM track_likes
+                            WHERE clerk_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT %s OFFSET %s
+                        ''', (user_id, limit, offset))
+                        
+                        rows = cur.fetchall()
+                        tracks = []
+                        
+                        for row in rows:
+                            tracks.append({
+                                'id': row[0],
+                                'track_id': row[1],
+                                'track_name': row[2],
+                                'track_artist': row[3],
+                                'track_image_url': row[4],
+                                'preview_url': row[5],
+                                'duration_ms': row[6],
+                                'created_at': row[7].isoformat() if row[7] else None
+                            })
+                    else:
+                        # Old schema without preview_url and duration_ms
+                        cur.execute('''
+                            SELECT id, track_id, track_name, track_artist, track_image_url, created_at
+                            FROM track_likes
+                            WHERE clerk_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT %s OFFSET %s
+                        ''', (user_id, limit, offset))
+                        
+                        rows = cur.fetchall()
+                        tracks = []
+                        
+                        for row in rows:
+                            tracks.append({
+                                'id': row[0],
+                                'track_id': row[1],
+                                'track_name': row[2],
+                                'track_artist': row[3],
+                                'track_image_url': row[4],
+                                'preview_url': None,  # Not available in old schema
+                                'duration_ms': None,  # Not available in old schema
+                                'created_at': row[5].isoformat() if row[5] else None
+                            })
                     
                     return tracks
                     
@@ -608,6 +678,79 @@ class ChatDatabase:
             import traceback
             traceback.print_exc()
             return set()
+
+    # === USER EMOTIONS ===
+
+    def save_user_emotion(self, clerk_id, emotion, definition):
+        """
+        Save or update a user-defined emotion term
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        INSERT INTO user_emotions (clerk_id, emotion, definition)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (clerk_id, emotion) 
+                        DO UPDATE SET definition = EXCLUDED.definition, created_at = CURRENT_TIMESTAMP
+                        RETURNING id
+                    ''', (clerk_id, emotion, definition))
+                    
+                    emotion_id = cur.fetchone()[0]
+                    conn.commit()
+                    print(f"✅ Saved emotion '{emotion}' for user {clerk_id[:10]}...")
+                    return emotion_id
+        except Exception as e:
+            print(f"❌ Error saving emotion: {e}")
+            return None
+
+    def get_user_emotions(self, clerk_id):
+        """
+        Get all emotion terms for a user
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        SELECT id, emotion, definition, created_at
+                        FROM user_emotions
+                        WHERE clerk_id = %s
+                        ORDER BY emotion ASC
+                    ''', (clerk_id,))
+                    
+                    rows = cur.fetchall()
+                    return [{
+                        'id': row[0],
+                        'emotion': row[1],
+                        'definition': row[2],
+                        'created_at': row[3].isoformat() if row[3] else None
+                    } for row in rows]
+        except Exception as e:
+            print(f"❌ Error fetching emotions: {e}")
+            return []
+
+    def delete_user_emotion(self, clerk_id, emotion_id):
+        """
+        Delete a user-defined emotion term
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        DELETE FROM user_emotions
+                        WHERE clerk_id = %s AND id = %s
+                        RETURNING id
+                    ''', (clerk_id, emotion_id))
+                    
+                    deleted_id = cur.fetchone()
+                    conn.commit()
+                    if deleted_id:
+                        print(f"✅ Deleted emotion ID {emotion_id} for user {clerk_id[:10]}...")
+                        return True
+                    return False
+        except Exception as e:
+            print(f"❌ Error deleting emotion: {e}")
+            return False
 
 
 # Create global chat database handler

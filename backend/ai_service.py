@@ -74,7 +74,7 @@ class GroqRecommendationService:
         system_prompt = f"""You are an AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 6 songs that exist on Spotify (we'll select the best 5)
+3. Recommend exactly 3 songs that exist on Spotify (we'll select the best 3)
 4. Provide a brief DJ-style introduction (2-3 sentences){weather_instruction}
 
 Return your response as a JSON object with this exact structure:
@@ -83,7 +83,8 @@ Return your response as a JSON object with this exact structure:
   "songs": [
     {{"title": "Song Title", "artist": "Artist Name"}},
     {{"title": "Song Title", "artist": "Artist Name"}},
-    ... (exactly 6 songs)
+    {{"title": "Song Title", "artist": "Artist Name"}}
+    ... (exactly 3 songs)
   ]
 }}
 
@@ -228,17 +229,17 @@ Based on this profile and request, recommend exactly 6 songs that match their ta
             if DEBUG_MODE:
                 print(f"Calling Groq API with model: {self.model}")
             
-            # Wait for rate limit if needed (estimate 1400 tokens for main recommendation with 6 songs)
-            groq_rate_limiter.wait_if_needed(estimated_tokens=1400)
+            # Wait for rate limit if needed (estimate 900 tokens for main recommendation with 3 songs)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=900)
             
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=0.8,
-                    max_tokens=1300,  # Adjusted for 6 songs
-                    response_format={"type": "json_object"}  # Force JSON output
-                )
+                model=self.model,
+                messages=messages,
+                temperature=0.8,
+                    max_tokens=800,  # Adjusted for 3 songs
+                response_format={"type": "json_object"}  # Force JSON output
+            )
             except Exception as e:
                 error_str = str(e)
                 # If strict JSON validation fails, retry without it (some models struggle with it)
@@ -513,8 +514,8 @@ CRITICAL RULES FOR highlighted_terms:
             if DEBUG_MODE:
                 print(f"    🤖 Generating lyrics explanation for: {track_name}")
             
-            # Wait for rate limit if needed (estimate 400 tokens for explanation - reduced from 510)
-            groq_rate_limiter.wait_if_needed(estimated_tokens=400)
+            # Wait for rate limit if needed (estimate 500 tokens for explanation)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=500)
             
             response = self.client.chat.completions.create(
                 model=self.model,
