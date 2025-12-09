@@ -92,6 +92,8 @@ export function AIInputWithLoadingDemo({
     }
   }, [isSignedIn, activeTab]);
 
+  // Note: Removed auto-scroll for dashboard/personal tabs - only chat tab should auto-scroll
+
   // Manage bubble visibility
   const [lastMessageId, setLastMessageId] = useState<string | null>(null);
 
@@ -829,7 +831,7 @@ export function AIInputWithLoadingDemo({
           <div className={cn(
             "text-[10px] font-bold tracking-widest absolute top-4 left-4 transition-colors duration-500",
             isSpeaking ? "text-black/40" : "text-white/40"
-          )}>AI DJ</div>
+          )}>Musify</div>
           
           {/* Avatar Container - Centered & No Glass Background */}
           <div className="w-full flex justify-center items-center z-10">

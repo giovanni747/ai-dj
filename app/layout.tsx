@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI DJ - Music Recommendations",
+  title: "Musify - Music Recommendations",
   description: "AI-powered music recommendations",
 };
 

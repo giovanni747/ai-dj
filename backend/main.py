@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import json
 import requests
-from typing import Optional
+from typing import Optional, Union, Tuple
 import concurrent.futures
 import time
 
@@ -126,8 +126,12 @@ if DEV_MODE:
 # Enable CORS for Next.js frontend
 CORS(app, supports_credentials=True, origins=['http://127.0.0.1:3000', 'http://localhost:3000']) 
 
-client_id = os.getenv("CLIENT_ID").strip()  # Remove any whitespace
-client_secret = os.getenv("CLIENT_SECRET").strip()
+client_id_env = os.getenv("CLIENT_ID")
+client_secret_env = os.getenv("CLIENT_SECRET")
+if not client_id_env or not client_secret_env:
+    raise ValueError("CLIENT_ID and CLIENT_SECRET environment variables are required")
+client_id = client_id_env.strip()  # Remove any whitespace
+client_secret = client_secret_env.strip()
 # Redirect URI - must match EXACTLY what's set in Spotify Developer Dashboard
 # Use environment variable if set, otherwise default to 127.0.0.1
 redirect_url = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5001/callback")
@@ -310,7 +314,7 @@ def batch_detect_and_translate(lyrics_list: list) -> list:
             print(f"    🔍 [Lyrics {i+1}]: Unknown language (will use DeepL auto-detect)")
     
     # Initialize output array with placeholders
-    output = [None] * len(lyrics_list)
+    output: list[Union[Tuple[str, str], None]] = [None] * len(lyrics_list)
     
     # Step 2: Handle English lyrics (no translation needed)
     if language_groups['en']:
@@ -430,11 +434,12 @@ def batch_detect_and_translate(lyrics_list: list) -> list:
                         groq_response = groq_client.chat.completions.create(
                             model="llama-3.1-8b-instant",
                             messages=[{"role": "user", "content": translation_prompt}],
-                            temperature=0.3,
-                            max_tokens=2000
-                        )
-                        
-                        translated_text = groq_response.choices[0].message.content.strip()
+                temperature=0.3,
+                max_tokens=2000
+            )
+            
+                        content = groq_response.choices[0].message.content
+                        translated_text = content.strip() if content else ""
                         
                         if translated_text and translated_text != original_lyrics and len(translated_text) > 50:
                             if len(original_lyrics) > 1500:
@@ -457,6 +462,7 @@ def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
     """
     DEPRECATED: Single lyrics translation (kept for compatibility).
     Use batch_detect_and_translate() for better performance.
+    Returns: (translated_lyrics, source_language)
     """
     if not lyrics:
         return lyrics, None
@@ -476,7 +482,8 @@ def translate_lyrics(lyrics: str) -> tuple[str, Optional[str]]:
         _translation_cache[lyrics_hash] = (translated, lang)
         return translated, lang
     
-        return lyrics, None
+    # Fallback: return original lyrics if batch translation fails
+    return lyrics, None
 
 def get_lyrics(track_name, artist_name):
     """
@@ -675,9 +682,11 @@ def get_playlists():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     playlists = sp.current_user_playlists()
-    playlists_info = [(pl['name'], pl['external_urls']['spotify']) for pl in playlists['items']]
+    playlists_info = [(pl['name'], pl['external_urls']['spotify']) for pl in playlists['items']]  # type: ignore
     playlist_html = '<br>'.join(f'{name}: {url}' for name, url in playlists_info)
 
     return playlist_html
@@ -714,17 +723,19 @@ def get_user():
         if error:
             print(f"ERROR: {error}")
             return jsonify({'authenticated': False, 'error': 'Not authenticated'}), 401
+        if sp is None:
+            return jsonify({'authenticated': False, 'error': 'Not authenticated'}), 401
         
         user = sp.current_user()
-        print(f"SUCCESS: Authenticated user: {user['display_name']}")
+        print(f"SUCCESS: Authenticated user: {user['display_name']}")  # type: ignore
         return jsonify({
             'authenticated': True,
-            'display_name': user['display_name'],
-            'email': user['email'],
-            'id': user['id'],
-            'profile_image_url': user['images'][0]['url'] if user['images'] else None,
-            'followers': user['followers']['total'],
-            'country': user['country'],
+            'display_name': user['display_name'],  # type: ignore
+            'email': user['email'],  # type: ignore
+            'id': user['id'],  # type: ignore
+            'profile_image_url': user['images'][0]['url'] if user['images'] else None,  # type: ignore
+            'followers': user['followers']['total'],  # type: ignore
+            'country': user['country'],  # type: ignore
         })
     except Exception as e:
         print(f"Error in get_user: {e}")
@@ -743,12 +754,14 @@ def get_playlist_tracks(playlist_id):
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     playlist = sp.playlist(playlist_id)
     result = sp.playlist_tracks(playlist_id, limit=50)
     tracks_data = []
-    for item in result['items']:
-        track = item['track']
+    for item in result['items']:  # type: ignore
+        track = item['track']  # type: ignore
         if track and track['id']: 
             tracks_data.append({
                 'name': track['name'],
@@ -761,9 +774,9 @@ def get_playlist_tracks(playlist_id):
                 'track_id': track['id']
             })
     return {
-        'playlist_name': playlist['name'],
-        'playlist_description': playlist['description'],
-        'total_tracks': playlist['tracks']['total'],
+        'playlist_name': playlist['name'],  # type: ignore
+        'playlist_description': playlist['description'],  # type: ignore
+        'total_tracks': playlist['tracks']['total'],  # type: ignore
         'tracks': tracks_data
     }
 
@@ -773,6 +786,8 @@ def get_audio_features(track_id):
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     try:
         # Try to fetch audio features from Spotify API
@@ -817,6 +832,8 @@ def get_batch_audio_features():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     track_ids = request.args.getlist('ids')
     if len(track_ids) > 100:
@@ -886,6 +903,8 @@ def get_top_tracks():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     time_range = request.args.get('time_range', 'medium_term')  # short_term, medium_term, long_term
     limit = int(request.args.get('limit', 50))
@@ -893,7 +912,7 @@ def get_top_tracks():
     try:
         top_tracks = sp.current_user_top_tracks(time_range=time_range, limit=limit)
         tracks_data = []
-        for track in top_tracks['items']:
+        for track in top_tracks['items']:  # type: ignore
             tracks_data.append({
                 'name': track['name'],
                 'artist': ', '.join([artist['name'] for artist in track['artists']]),
@@ -905,7 +924,7 @@ def get_top_tracks():
                 'track_id': track['id'],
                 'images': track['album']['images']
             })
-        return {'tracks': tracks_data, 'total': top_tracks['total']}
+        return {'tracks': tracks_data, 'total': top_tracks['total']}  # type: ignore
     except Exception as e:
         return {'error': str(e)}, 500
 
@@ -914,13 +933,15 @@ def get_recently_played():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     limit = int(request.args.get('limit', 50))
     
     try:
         recent_tracks = sp.current_user_recently_played(limit=limit)
         tracks_data = []
-        for item in recent_tracks['items']:
+        for item in recent_tracks['items']:  # type: ignore
             track = item['track']
             tracks_data.append({
                 'name': track['name'],
@@ -943,6 +964,8 @@ def get_user_profile():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     try:
         # Get user info
@@ -958,39 +981,45 @@ def get_user_profile():
         # Get playlists
         playlists = sp.current_user_playlists(limit=50)
         
+        # Type checker: Spotify API returns dicts, not None
+        if not user or not top_tracks_short or not top_tracks_medium or not recent_tracks or not playlists:
+            return {'error': 'Failed to fetch user data'}, 500
+        
         # Audio features are no longer available from Spotify API (deprecated Nov 2024)
         # Return empty dict - will use database audio profile if available
         avg_features = {}
         
         # Extract genres from top artists
         top_artists = sp.current_user_top_artists(time_range='medium_term', limit=20)
+        if not top_artists:
+            return {'error': 'Failed to fetch top artists'}, 500
         genres = []
-        for artist in top_artists['items']:
-            genres.extend(artist.get('genres', []))
+        for artist in top_artists['items']:  # type: ignore
+            genres.extend(artist.get('genres', []))  # type: ignore
         
         return {
             'user': {
-                'display_name': user['display_name'],
-                'email': user['email'],
-                'id': user['id'],
-                'followers': user['followers']['total']
+                'display_name': user['display_name'],  # type: ignore
+                'email': user['email'],  # type: ignore
+                'id': user['id'],  # type: ignore
+                'followers': user['followers']['total']  # type: ignore
             },
             'listening_patterns': {
-                'top_tracks_short_term': len(top_tracks_short['items']),
-                'top_tracks_medium_term': len(top_tracks_medium['items']),
-                'recently_played': len(recent_tracks['items']),
-                'playlists_count': len(playlists['items'])
+                'top_tracks_short_term': len(top_tracks_short['items']),  # type: ignore
+                'top_tracks_medium_term': len(top_tracks_medium['items']),  # type: ignore
+                'recently_played': len(recent_tracks['items']),  # type: ignore
+                'playlists_count': len(playlists['items'])  # type: ignore
             },
             'audio_features_avg': avg_features,
             'genres': list(set(genres))[:20],  # Unique genres, top 20
             'top_artists': [
                 {
-                    'name': artist['name'],
-                    'popularity': artist['popularity'],
-                    'genres': artist.get('genres', []),
-                    'images': artist.get('images', [])
+                    'name': artist['name'],  # type: ignore
+                    'popularity': artist['popularity'],  # type: ignore
+                    'genres': artist.get('genres', []),  # type: ignore
+                    'images': artist.get('images', [])  # type: ignore
                 }
-                for artist in top_artists['items'][:10]
+                for artist in top_artists['items'][:10]  # type: ignore
             ]
         }
     except Exception as e:
@@ -1079,9 +1108,13 @@ def chat():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.json
+        if data is None:
+            return jsonify({"error": "JSON body is required"}), 400
         user_message = data.get('message')
         
         if not user_message:
@@ -1129,6 +1162,8 @@ def analyze_profile():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return {'error': 'Not authenticated'}, 401
     
     try:
         # Get Clerk user ID for caching
@@ -1189,6 +1224,8 @@ def save_user_emotion():
             return jsonify({"error": str(e)}), 401
             
         data = request.json
+        if data is None:
+            return jsonify({"error": "JSON body is required"}), 400
         emotion = data.get('emotion')
         definition = data.get('definition')
         
@@ -1227,34 +1264,83 @@ def delete_user_emotion(emotion_id):
 
 @app.route('/dj_recommend', methods=['POST'])
 def dj_recommend():
-    """Get AI DJ recommendations: LLM recommends songs, then we fetch from Spotify"""
+    """Get Musify recommendations: LLM recommends songs, then we fetch from Spotify"""
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         import json
         
         data = request.json
-        user_message = data.get('message', 'recommend me some great songs')
+        if data is None:
+            return jsonify({"error": "JSON body is required"}), 400
+        user_message = data.get('message', '') or 'recommend me some great songs'
         selected_tool = data.get('tool')
         
-        # Check for custom emotion definition
-        if selected_tool and selected_tool.startswith('emotion-'):
-            try:
-                clerk_id = get_clerk_user_id()
-                emotion_name = selected_tool.replace('emotion-', '').lower()
-                # Fetch user definitions
+        # Check for custom emotion definitions in input text FIRST (before any tool modifications)
+        emotion_context_to_add = None
+        try:
+            clerk_id = get_clerk_user_id()
+            if chat_db and clerk_id:
+                # Get all user-defined emotions
                 emotions = chat_db.get_user_emotions(clerk_id)
-                # Find matching emotion (case-insensitive)
-                definition = next((e['definition'] for e in emotions if e['emotion'].lower() == emotion_name), None)
                 
-                if definition:
-                    print(f"✅ Found custom definition for emotion '{emotion_name}': {definition}")
-                    # Append definition to message
-                    user_message = f"{user_message} (Context: I am feeling {emotion_name}. My personal definition of this emotion is: {definition})"
-            except Exception as e:
-                print(f"⚠️ Error checking custom emotion definition: {e}")
+                if emotions:
+                    import re
+                    # Check if any emotion term appears in the user message
+                    original_message_lower = user_message.lower()
+                    found_emotions = []
+                    
+                    for emotion_data in emotions:
+                        emotion_term = emotion_data['emotion'].lower()
+                        definition = emotion_data['definition']
+                        
+                        # Use word boundaries to match whole words only (case-insensitive)
+                        # This prevents matching "happy" inside "unhappy"
+                        pattern = r'\b' + re.escape(emotion_term) + r'\b'
+                        if re.search(pattern, original_message_lower, re.IGNORECASE):
+                            found_emotions.append({
+                                'emotion': emotion_data['emotion'],
+                                'definition': definition
+                            })
+                            print(f"✅ Detected emotion term '{emotion_data['emotion']}' in user message")
+                    
+                    # If emotion terms were found, prepare context to add
+                    if found_emotions:
+                        emotion_contexts = []
+                        for emo in found_emotions:
+                            emotion_contexts.append(f"'{emo['emotion']}' (my personal definition: {emo['definition']})")
+                        
+                        context_text = " | ".join(emotion_contexts)
+                        emotion_context_to_add = f" [Important context: When I mention these emotions, use my personal definitions: {context_text}]"
+                        print(f"📝 Detected emotion terms in input: {', '.join([e['emotion'] for e in found_emotions])}")
+                
+                # Also check for emotion tool (legacy support)
+                if selected_tool and selected_tool.startswith('emotion-'):
+                    emotion_name = selected_tool.replace('emotion-', '').lower()
+                    # Find matching emotion (case-insensitive)
+                    definition = next((e['definition'] for e in emotions if e['emotion'].lower() == emotion_name), None)
+                    
+                    if definition:
+                        print(f"✅ Found custom definition for emotion tool '{emotion_name}': {definition}")
+                        # Add to emotion context
+                        if emotion_context_to_add:
+                            emotion_context_to_add += f" (Also, I am feeling {emotion_name}. My personal definition of this emotion is: {definition})"
+                        else:
+                            emotion_context_to_add = f" (Context: I am feeling {emotion_name}. My personal definition of this emotion is: {definition})"
+        except Exception as e:
+            print(f"⚠️ Error checking custom emotion definitions: {e}")
+        
+        # Modify prompt for discover tool - recommend based only on user data
+        if selected_tool == 'discover':
+            user_message = "Recommend songs based solely on my music taste and listening history. Use my top artists, genres, and audio preferences to discover new music that matches my style. Don't use any specific request - just analyze my profile and recommend the best matches."
+        
+        # Add emotion context if any emotions were detected
+        if emotion_context_to_add:
+            user_message = user_message + emotion_context_to_add
         
         # Get weather data if weather tool is selected
         weather_data = None
@@ -1315,15 +1401,28 @@ def dj_recommend():
         except Exception as e:
             print(f"⚠️  Could not get Clerk user ID: {e}")
         
-        # Get previously recommended tracks for similar prompts (to avoid duplicates)
+        # Get ALL previously recommended tracks to avoid duplicates (not just similar prompts)
         previously_recommended_track_ids = set()
         if chat_db and clerk_id:
             try:
-                previously_recommended_track_ids = chat_db.get_previously_recommended_tracks(
+                # Get tracks from similar prompts (lower threshold to catch more)
+                similar_tracks = chat_db.get_previously_recommended_tracks(
                     user_id=clerk_id,
                     user_message=user_message,
-                    similarity_threshold=0.85  # Less strict - allow duplicates but not too frequently
+                    similarity_threshold=0.3  # Lower threshold to catch more similar prompts
                 )
+                previously_recommended_track_ids.update(similar_tracks)
+                
+                # Also get ALL recently recommended tracks (last 50 messages) regardless of similarity
+                # This ensures we don't repeat tracks even if prompts are different
+                all_recent_tracks = chat_db.get_all_recently_recommended_tracks(
+                    user_id=clerk_id,
+                    limit=50  # Check last 50 assistant messages
+                )
+                previously_recommended_track_ids.update(all_recent_tracks)
+                
+                if len(previously_recommended_track_ids) > 0:
+                    print(f"🚫 Excluding {len(previously_recommended_track_ids)} previously recommended tracks to prevent duplicates")
             except Exception as e:
                 print(f"⚠️  Could not load previously recommended tracks: {e}")
                 # Continue without duplicate prevention
@@ -1416,7 +1515,8 @@ def dj_recommend():
                         print(f"Failed to fix JSON: {e3}")
                         # Last resort: try to extract just the intro and songs manually
                         # More flexible regex to handle unescaped quotes
-                        intro_match = re.search(r'"intro":\s*"((?:[^"\\]|\\.|"(?!"))*(?:"|$))', json_str, re.DOTALL)
+                        intro_match_result: re.Match[str] | None = re.search(r'"intro":\s*"((?:[^"\\]|\\.|"(?!"))*(?:"|$))', json_str, re.DOTALL)
+                        intro_match: re.Match[str] | None = intro_match_result
                         if not intro_match:
                             # Try even more flexible: find intro field and extract until we hit ", "songs"
                             intro_start = json_str.find('"intro":')
@@ -1427,13 +1527,19 @@ def dj_recommend():
                                     intro_text = json_str[intro_start:songs_start-2].strip().rstrip('",')
                                     # Clean up the intro text
                                     intro_text = intro_text.strip('"').replace('\\"', '"').replace('\\n', '\n')
-                                    intro_match = type('obj', (object,), {'group': lambda self, n: intro_text if n == 1 else None})()
+                                    # Create a simple match-like object
+                                    class MockMatch:
+                                        def __init__(self, text: str):
+                                            self._text = text
+                                        def group(self, n: int) -> str:
+                                            return self._text if n == 1 else ""
+                                    intro_match = MockMatch(intro_text)  # type: ignore
                         
                         songs_match = re.search(r'"songs":\s*\[(.*?)\]', json_str, re.DOTALL)
                         
                         if intro_match and songs_match:
-                            intro_text = intro_match.group(1) if hasattr(intro_match, 'group') else intro_match
-                            intro_text = intro_text.replace('\\"', '"').replace('\\n', '\n').strip('"')
+                            intro_text_str = intro_match.group(1) if hasattr(intro_match, 'group') and callable(getattr(intro_match, 'group', None)) else str(intro_match)
+                            intro_text = intro_text_str.replace('\\"', '"').replace('\\n', '\n').strip('"')
                             # Try to parse songs array
                             try:
                                 songs_str = '[' + songs_match.group(1) + ']'
@@ -1451,13 +1557,24 @@ def dj_recommend():
                 raise ValueError(f"Could not find JSON in LLM response. Response was: {ai_response_raw[:500]}")
         
         # Extract intro and songs
+        # Handle both "songs" and "recommendations" keys (for backward compatibility)
         dj_intro = ai_response_json.get('intro', 'Check out these amazing tracks!')
         llm_songs = ai_response_json.get('songs', [])
+        if not llm_songs:
+            # Try "recommendations" key (old format)
+            recommendations = ai_response_json.get('recommendations', [])
+            if recommendations:
+                # Convert recommendations format to songs format
+                llm_songs = [
+                    {"title": rec.get('song', rec.get('title', '')), "artist": rec.get('artist', '')}
+                    for rec in recommendations
+                ]
+                print(f"✅ Converted {len(llm_songs)} recommendations to songs format")
         
         print(f"\n=== PARSED LLM RECOMMENDATIONS ===")
         print(f"DJ Intro: {dj_intro}")
         print(f"Songs to search: {len(llm_songs)}")
-        for i, song in enumerate(llm_songs[:6], 1):  # Show first 6 (we requested 6)
+        for i, song in enumerate(llm_songs[:7], 1):  # Show first 7 (we requested 7)
             print(f"  {i}. {song.get('title', 'Unknown')} by {song.get('artist', 'Unknown')}")
         print(f"==================================\n")
         
@@ -1476,11 +1593,11 @@ def dj_recommend():
         tracks = []
         found_count = 0
         
-        print(f"\n=== SPOTIFY SEARCH (keeping duplicates, will select best 3) ===")
+        print(f"\n=== SPOTIFY SEARCH (filtering duplicates) ===")
         if previously_recommended_track_ids:
-            print(f"ℹ️  Found {len(previously_recommended_track_ids)} tracks from similar prompts - duplicates allowed (will select best 3)")
+            print(f"🚫 Excluding {len(previously_recommended_track_ids)} previously recommended tracks to prevent duplicates")
         else:
-            print(f"ℹ️  No similar prompts found - all recommendations will be new")
+            print(f"ℹ️  No previously recommended tracks found - all recommendations will be new")
         print(f"================================================\n")
         
         for song_data in llm_songs:
@@ -1502,41 +1619,43 @@ def dj_recommend():
                     market=country or 'US'
                 )
                 
-                if search_results['tracks']['items']:
-                    track = search_results['tracks']['items'][0]
-                    track_id = track['id']
+                if search_results and search_results['tracks']['items']:  # type: ignore
+                    track = search_results['tracks']['items'][0]  # type: ignore
+                    track_id = track['id']  # type: ignore
                     
-                    # Keep duplicates - we'll remove the worst one later if we have more than 5
-                    # Previously skipped, now we keep all tracks to ensure we get 5
+                    # Skip if this track was already recommended
+                    if track_id in previously_recommended_track_ids:
+                        print(f"  ⏭️  Skipping duplicate: {track['name']} by {', '.join([a['name'] for a in track['artists']])} (already recommended)")  # type: ignore
+                        continue
                     
                     found_count += 1
                     
-                    preview_url = track.get('preview_url')
-                    print(f"  ✓ Found: {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
+                    preview_url = track.get('preview_url')  # type: ignore
+                    print(f"  ✓ Found: {track['name']} by {', '.join([a['name'] for a in track['artists']])}")  # type: ignore
                     print(f"    Preview URL: {preview_url if preview_url else 'NULL/None'}")
                     
                     # If Spotify preview is missing, try iTunes as fallback
                     if not preview_url:
                         print(f"    Trying iTunes API fallback...")
-                        artist_name = ', '.join([a['name'] for a in track['artists']])
-                        itunes_preview = get_itunes_preview_url(track['name'], artist_name)
+                        artist_name = ', '.join([a['name'] for a in track['artists']])  # type: ignore
+                        itunes_preview = get_itunes_preview_url(track['name'], artist_name)  # type: ignore
                         if itunes_preview:
                             preview_url = itunes_preview
                     
                     tracks.append({
                         'position': len(tracks) + 1,
-                        'id': track['id'],
-                        'name': track['name'],
-                        'artist': ', '.join([a['name'] for a in track['artists']]),
-                        'artists': [{'name': a['name'], 'id': a['id']} for a in track['artists']],
+                        'id': track['id'],  # type: ignore
+                        'name': track['name'],  # type: ignore
+                        'artist': ', '.join([a['name'] for a in track['artists']]),  # type: ignore
+                        'artists': [{'name': a['name'], 'id': a['id']} for a in track['artists']],  # type: ignore
                         'album': {
-                            'name': track['album']['name'],
-                            'images': track['album']['images']
+                            'name': track['album']['name'],  # type: ignore
+                            'images': track['album']['images']  # type: ignore
                         },
                         'preview_url': preview_url,  # This will be Spotify or iTunes URL
-                        'external_url': track['external_urls']['spotify'],
-                        'duration_ms': track['duration_ms'],
-                        'popularity': track['popularity']
+                        'external_url': track['external_urls']['spotify'],  # type: ignore
+                        'duration_ms': track['duration_ms'],  # type: ignore
+                        'popularity': track['popularity']  # type: ignore
                     })
                 else:
                     # Try searching with just the title
@@ -1547,32 +1666,35 @@ def dj_recommend():
                         market=country or 'US'
                     )
                     
-                    if search_results['tracks']['items']:
-                        track = search_results['tracks']['items'][0]
-                        track_id = track['id']
+                    if search_results and search_results['tracks']['items']:  # type: ignore
+                        track = search_results['tracks']['items'][0]  # type: ignore
+                        track_id = track['id']  # type: ignore
                         
-                        # Keep duplicates - we'll remove the worst one later if we have more than 5
+                        # Skip if this track was already recommended
+                        if track_id in previously_recommended_track_ids:
+                            print(f"  ⏭️  Skipping duplicate: {track['name']} by {', '.join([a['name'] for a in track['artists']])} (already recommended)")  # type: ignore
+                            continue
                         
                         found_count += 1
                         
-                        preview_url = track.get('preview_url')
-                        print(f"  ✓ Found (title only): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")
+                        preview_url = track.get('preview_url')  # type: ignore
+                        print(f"  ✓ Found (title only): {track['name']} by {', '.join([a['name'] for a in track['artists']])}")  # type: ignore
                         print(f"    Preview URL: {preview_url if preview_url else 'NULL/None'}")
                         
                         # If Spotify preview is missing, try iTunes as fallback
                         if not preview_url:
                             print(f"    Trying iTunes API fallback...")
-                            artist_name = ', '.join([a['name'] for a in track['artists']])
-                            itunes_preview = get_itunes_preview_url(track['name'], artist_name)
+                            artist_name = ', '.join([a['name'] for a in track['artists']])  # type: ignore
+                            itunes_preview = get_itunes_preview_url(track['name'], artist_name)  # type: ignore
                             if itunes_preview:
                                 preview_url = itunes_preview
                         
                         tracks.append({
                             'position': len(tracks) + 1,
-                            'id': track['id'],
-                            'name': track['name'],
-                            'artist': ', '.join([a['name'] for a in track['artists']]),
-                            'artists': [{'name': a['name'], 'id': a['id']} for a in track['artists']],
+                            'id': track['id'],  # type: ignore
+                            'name': track['name'],  # type: ignore
+                            'artist': ', '.join([a['name'] for a in track['artists']]),  # type: ignore
+                            'artists': [{'name': a['name'], 'id': a['id']} for a in track['artists']],  # type: ignore
                             'album': {
                                 'name': track['album']['name'],
                                 'images': track['album']['images']
@@ -1756,9 +1878,9 @@ def dj_recommend():
         
         # ⏱️ TIMING: Lyrics fetching (now using BATCH translation)
         lyrics_fetch_start = time.time()
-        # Fetch lyrics for all tracks with BATCH translation (should be up to 3, will select top 3 later)
+        # Fetch lyrics for all tracks with BATCH translation (should be up to 5, will select top 5 later)
         print(f"\n=== FETCHING LYRICS & BATCH TRANSLATION + SCORING ===")
-        print(f"Processing {len(tracks)} tracks (will select best 3)")
+        print(f"Processing {len(tracks)} tracks (will select best 5)")
         
         # Step 1: Fetch all lyrics from Genius in parallel (no translation yet)
         def fetch_genius_lyrics(track_data):
@@ -1938,16 +2060,15 @@ def dj_recommend():
         # Sort by combined score (highest first) - best scores first
         tracks_with_scores.sort(key=lambda x: x.get('combined_score', 0), reverse=True)
         
-        # Always select exactly 5 tracks (remove worst ones if we have more than 5)
-        # Always select exactly 3 tracks (remove worst ones if we have more than 3)
-        if len(tracks_with_scores) > 3:
-            selected_tracks = tracks_with_scores[:3]
-            removed_count = len(tracks_with_scores) - 3
-            print(f"\n✅ Selected top 3 tracks (removed {removed_count} lowest scoring track(s))")
+        # Always select exactly 7 tracks (remove worst ones if we have more than 7)
+        if len(tracks_with_scores) > 7:
+            selected_tracks = tracks_with_scores[:7]
+            removed_count = len(tracks_with_scores) - 7
+            print(f"\n✅ Selected top 7 tracks (removed {removed_count} lowest scoring track(s))")
             if removed_count > 0:
-                print(f"   Removed tracks: {', '.join([t['name'] for t in tracks_with_scores[3:]])}")
+                print(f"   Removed tracks: {', '.join([t['name'] for t in tracks_with_scores[7:]])}")
         else:
-            selected_tracks = tracks_with_scores[:min(3, len(tracks_with_scores))]
+            selected_tracks = tracks_with_scores[:min(7, len(tracks_with_scores))]
             print(f"\n✅ Selected {len(selected_tracks)} tracks (all available)")
         
         for i, track in enumerate(selected_tracks, 1):
@@ -1957,7 +2078,7 @@ def dj_recommend():
         explanations_start = time.time()
         # ⏱️ TIMING: Explanations generation (parallel)
         explanations_start = time.time()
-        # Generate explanations only for the final 3 selected tracks (PARALLEL)
+        # Generate explanations only for the final 5 selected tracks (PARALLEL)
         print(f"\n=== GENERATING EXPLANATIONS FOR SELECTED TRACKS (PARALLEL) ===")
         print(f"Processing {len(selected_tracks)} tracks for explanations in parallel...")
         
@@ -2008,10 +2129,10 @@ def dj_recommend():
                     print(f"  ✅ {track_name}: Generated explanation ({len(explanation)} chars) with {len(result['highlighted_terms'])} terms")
                 else:
                     print(f"  ⚠️ {track_name}: Explanation returned None")
-                
             except Exception as e:
-                print(f"  ❌ {track_name}: Error generating explanation: {e}")
-                result['error'] = str(e)
+                print(f"  ⚠️ {track_name}: Could not generate explanation: {e}")
+                result['explanation'] = None
+                result['highlighted_terms'] = []
             
             return result
         
@@ -2125,6 +2246,8 @@ def message_feedback():
         clerk_id = get_clerk_user_id()
         
         data = request.json
+        if data is None:
+            return jsonify({"error": "JSON body is required"}), 400
         message_id = data.get('message_id')
         feedback_type = data.get('feedback_type')  # 'like', 'dislike', or None to remove
         
@@ -2164,6 +2287,8 @@ def track_like():
             return jsonify({"error": str(e)}), 401
         
         data = request.json
+        if data is None:
+            return jsonify({"error": "JSON body is required"}), 400
         track_id = data.get('track_id')
         track_name = data.get('track_name')
         track_artist = data.get('track_artist')
@@ -2223,13 +2348,15 @@ def get_chat_history():
     sp, redirect_response = get_authenticated_spotify()
     if redirect_response:
         return redirect_response
+    if sp is None:
+        return jsonify({"error": "Not authenticated"}), 401
     
     if not chat_db:
         return jsonify({"error": "Database not configured"}), 500
     
     try:
         user = sp.current_user()
-        user_id = user['id']
+        user_id = user['id']  # type: ignore
         
         limit = int(request.args.get('limit', 50))
         offset = int(request.args.get('offset', 0))
@@ -2399,4 +2526,6 @@ def get_frequently_liked_terms():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    # debug=True enables auto-reloader which restarts on file changes
+    # Set use_reloader=False to disable auto-restart, or keep True for development
+    app.run(debug=True, port=5001, use_reloader=False)

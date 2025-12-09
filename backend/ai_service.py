@@ -43,7 +43,7 @@ class GroqRecommendationService:
         return response.choices[0].message.content
     
     def get_recommendations(self, user_message, user_profile, conversation_history=None, weather_data=None):
-        """Get AI DJ recommendations: returns both intro text and song list"""
+        """Get Musify recommendations: returns both intro text and song list"""
         
         print(f"🌤️ [WEATHER DEBUG AI] get_recommendations called with weather_data: {weather_data is not None}", flush=True)
         if weather_data:
@@ -51,10 +51,13 @@ class GroqRecommendationService:
         import sys
         sys.stdout.flush()
         
+        # Check if this is a discover request (recommend based only on user data)
+        is_discover_mode = "based solely on my music taste" in user_message.lower() or "don't use any specific request" in user_message.lower()
+        
         # Build conversation history
         messages = []
         
-        # System prompt - AI DJ that recommends songs
+        # System prompt - Musify AI that recommends songs
         weather_instruction = ""
         if weather_data:
             print(f"🌤️ [WEATHER DEBUG AI] Adding weather instructions to system prompt", flush=True)
@@ -71,10 +74,44 @@ class GroqRecommendationService:
    - Snow → peaceful, ambient, or winter-themed songs
    The weather should influence the song selection to create a perfect atmosphere."""
         
-        system_prompt = f"""You are an AI DJ specializing in music recommendations. Your job is to:
+        # Modify system prompt for discover mode
+        if is_discover_mode:
+            system_prompt = f"""You are a Musify AI DJ specializing in music discovery. Your job is to:
+1. Analyze the user's music taste from their Spotify data (genres, artists, audio features, top tracks)
+2. Recommend songs based SOLELY on their music profile - ignore any specific request in the user message
+3. Recommend exactly 7 songs that exist on Spotify (we'll select the best 7)
+4. Provide a brief DJ-style introduction (2-3 sentences) explaining why these songs match their taste{weather_instruction}
+
+Return your response as a JSON object with this exact structure:
+{{
+  "intro": "Your DJ-style introduction here (3-5 sentences, make it longer and more engaging)",
+  "songs": [
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}}
+    ... (exactly 7 songs)
+  ]
+}}
+
+IMPORTANT FOR DISCOVER MODE:
+- Focus ONLY on the user's music profile data (genres, artists, audio features)
+- Recommend songs that align with their listening history and preferences
+- Look for patterns in their top artists and genres
+- Match the energy, danceability, and mood (valence) of their profile
+- Do NOT use any specific request from the user - only use their profile data
+- Only recommend songs that actually exist on Spotify (popular, well-known songs)
+- Use "songs" (not "recommendations") as the key for the array
+- Escape all quotes in the intro text using backslashes (e.g., use \\" for quotes inside strings)
+- Return ONLY valid JSON, no other text, no markdown code blocks"""
+        else:
+            system_prompt = f"""You are a Musify AI DJ specializing in music recommendations. Your job is to:
 1. Analyze the user's music taste from their Spotify data (genres, artists, audio features)
 2. Match their taste with their specific request
-3. Recommend exactly 3 songs that exist on Spotify (we'll select the best 3)
+3. Recommend exactly 7 songs that exist on Spotify (we'll select the best 7)
 4. Provide a brief DJ-style introduction (2-3 sentences){weather_instruction}
 
 Return your response as a JSON object with this exact structure:
@@ -83,8 +120,12 @@ Return your response as a JSON object with this exact structure:
   "songs": [
     {{"title": "Song Title", "artist": "Artist Name"}},
     {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
+    {{"title": "Song Title", "artist": "Artist Name"}},
     {{"title": "Song Title", "artist": "Artist Name"}}
-    ... (exactly 3 songs)
+    ... (exactly 7 songs)
   ]
 }}
 
@@ -165,7 +206,20 @@ Use this weather information to select songs that match the mood and atmosphere.
             import sys
             sys.stdout.flush()
         
-        context = f"""User's Music Profile:
+        # Modify context for discover mode
+        if is_discover_mode:
+            context = f"""User's Music Profile:
+- Genres: {', '.join(user_profile.get('genres', [])[:10]) or 'Various'}
+- Top Artists: {', '.join(top_artists_names) or 'Various'}
+- Top Tracks: {', '.join(top_tracks_names) if top_tracks_names else 'None'}
+- Energy Level: {energy_str}
+- Danceability: {danceability_str}
+- Mood (Valence): {valence_str}
+{weather_info}
+
+DISCOVER MODE: Recommend exactly 7 songs based SOLELY on this user's music profile. Analyze their listening patterns, favorite genres, top artists, and audio preferences. Recommend songs that match their taste profile - similar artists, genres, energy levels, and mood. Do not use any specific user request - only use the profile data above. Return as JSON."""
+        else:
+            context = f"""User's Music Profile:
 - Genres: {', '.join(user_profile.get('genres', [])[:10]) or 'Various'}
 - Top Artists: {', '.join(top_artists_names) or 'Various'}
 - Top Tracks: {', '.join(top_tracks_names) if top_tracks_names else 'None'}
@@ -175,7 +229,7 @@ Use this weather information to select songs that match the mood and atmosphere.
 {weather_info}
 User's Request: {user_message}
 
-Based on this profile and request, recommend exactly 6 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
+Based on this profile and request, recommend exactly 7 songs that match their taste and request. These should be the best matches for the user's request. Return as JSON."""
         
         messages.append({
             "role": "user",
@@ -229,15 +283,15 @@ Based on this profile and request, recommend exactly 6 songs that match their ta
             if DEBUG_MODE:
                 print(f"Calling Groq API with model: {self.model}")
             
-            # Wait for rate limit if needed (estimate 900 tokens for main recommendation with 3 songs)
-            groq_rate_limiter.wait_if_needed(estimated_tokens=900)
+            # Wait for rate limit if needed (estimate 1200 tokens for main recommendation with 5 songs)
+            groq_rate_limiter.wait_if_needed(estimated_tokens=1200)
             
             try:
                 response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.8,
-                    max_tokens=800,  # Adjusted for 3 songs
+                    max_tokens=1000,  # Adjusted for 5 songs
                 response_format={"type": "json_object"}  # Force JSON output
             )
             except Exception as e:
@@ -298,7 +352,10 @@ Based on this profile and request, recommend exactly 6 songs that match their ta
             max_tokens=100
         )
         
-        seed_tracks = response.choices[0].message.content.strip().split(',')
+        content = response.choices[0].message.content
+        if not content:
+            return []
+        seed_tracks = content.strip().split(',')
         return [track.strip() for track in seed_tracks]
     
     def batch_score_lyrics_relevance(self, tracks_data, user_prompt):
@@ -377,7 +434,11 @@ Return ONLY valid JSON, no other text. Each score must be an integer between 1 a
                 max_tokens=100,
                 response_format={"type": "json_object"}  # Force JSON output
             )
-            score_text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                # Return default scores if content is None
+                return {track['track_id']: 3 for track in tracks_data}
+            score_text = content.strip()
             
             # Parse JSON response
             import json
@@ -449,7 +510,10 @@ Return ONLY a single number from 1-5 (where 1 = poor match, 3 = decent match, 5 
                 temperature=0.3,  # Lower temperature for more consistent scoring
                 max_tokens=10
             )
-            score_text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                return 3  # Default score if content is None
+            score_text = content.strip()
             # Extract number from response
             import re
             score_match = re.search(r'\d+', score_text)
@@ -524,7 +588,10 @@ CRITICAL RULES FOR highlighted_terms:
                 max_tokens=250,  # Increased to prevent "max completion tokens reached" errors
                 response_format={"type": "json_object"}  # Force JSON output
             )
-            response_text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                return None, []  # Return None if content is missing
+            response_text = content.strip()
             
             # Parse JSON response
             import json

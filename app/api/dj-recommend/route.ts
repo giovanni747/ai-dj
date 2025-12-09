@@ -24,7 +24,8 @@ export async function POST(request: Request) {
       location 
     });
 
-    if (!message) {
+    // Allow empty message for discover tool (backend will generate prompt)
+    if (!message && tool !== 'discover') {
       return NextResponse.json(
         { error: 'Message is required' },
         { status: 400 }

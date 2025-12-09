@@ -68,7 +68,10 @@ class ChatDatabase:
                         RETURNING id
                     ''', (session_id, role, content, tracks_json, clerk_id))
                     
-                    message_id = cur.fetchone()[0]
+                    row = cur.fetchone()
+                    if row is None:
+                        raise ValueError("Failed to insert message - no ID returned")
+                    message_id = row[0]
                     conn.commit()
                     
                     user_display = clerk_id[:10] if clerk_id else (user_id[:10] if user_id else "unknown")
@@ -679,6 +682,60 @@ class ChatDatabase:
             traceback.print_exc()
             return set()
 
+    def get_all_recently_recommended_tracks(self, user_id, limit=50):
+        """
+        Get ALL track IDs that were recently recommended (regardless of prompt similarity)
+        This helps prevent duplicates even when prompts are different.
+        
+        Args:
+            user_id: Clerk user ID
+            limit: Number of recent assistant messages to check (default: 50)
+        
+        Returns:
+            Set of track IDs that were recently recommended
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cur:
+                    # Get all recent assistant messages with tracks
+                    cur.execute('''
+                        SELECT tracks
+                        FROM chat_messages
+                        WHERE clerk_id = %s
+                        AND role = 'assistant'
+                        AND tracks IS NOT NULL
+                        AND jsonb_array_length(tracks) > 0
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                    ''', (user_id, limit))
+                    
+                    rows = cur.fetchall()
+                    
+                    if not rows:
+                        return set()
+                    
+                    # Collect all track IDs
+                    all_track_ids = set()
+                    
+                    for row in rows:
+                        assistant_tracks = row[0]
+                        
+                        if isinstance(assistant_tracks, list):
+                            for track in assistant_tracks:
+                                if isinstance(track, dict) and track.get('id'):
+                                    all_track_ids.add(track['id'])
+                    
+                    if len(all_track_ids) > 0:
+                        print(f"📋 Found {len(all_track_ids)} total tracks from recent recommendations")
+                    
+                    return all_track_ids
+                    
+        except Exception as e:
+            print(f"❌ Error getting all recently recommended tracks: {e}")
+            import traceback
+            traceback.print_exc()
+            return set()
+
     # === USER EMOTIONS ===
 
     def save_user_emotion(self, clerk_id, emotion, definition):
@@ -696,7 +753,10 @@ class ChatDatabase:
                         RETURNING id
                     ''', (clerk_id, emotion, definition))
                     
-                    emotion_id = cur.fetchone()[0]
+                    row = cur.fetchone()
+                    if row is None:
+                        raise ValueError("Failed to insert emotion - no ID returned")
+                    emotion_id = row[0]
                     conn.commit()
                     print(f"✅ Saved emotion '{emotion}' for user {clerk_id[:10]}...")
                     return emotion_id

@@ -47,7 +47,7 @@ const PopoverContent = React.forwardRef<
       align={align}
       sideOffset={sideOffset}
       className={cn(
-        "z-50 w-64 rounded-xl bg-white/10 backdrop-blur-2xl border border-white/20 p-2 text-white shadow-md outline-none animate-in data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+        "z-50 w-48 rounded-xl bg-white/10 backdrop-blur-2xl border border-white/20 p-2 text-white shadow-md outline-none animate-in data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0 data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
         className
       )}
       {...props}
@@ -56,12 +56,22 @@ const PopoverContent = React.forwardRef<
 ));
 PopoverContent.displayName = PopoverPrimitive.Content.displayName;
 
+// Tool type definition
+interface Tool {
+  id: string;
+  name: string;
+  shortName: string;
+  icon: React.ComponentType<{ className?: string }>;
+  hasSubmenu?: boolean;
+  extra?: React.ReactNode;
+}
+
 // Tools list for the popover
-const toolsList = [
+const toolsList: Tool[] = [
   { id: 'discover', name: 'Discover', shortName: 'Discover', icon: Compass },
   { id: 'emotion', name: 'Emotion', shortName: 'Emotion', icon: Heart, hasSubmenu: true },
   { id: 'genres', name: 'Genres', shortName: 'Genres', icon: Music, hasSubmenu: true },
-  { id: 'weather', name: 'Weather-based music', shortName: 'Weather', icon: Cloud },
+  { id: 'weather', name: 'Weather', shortName: 'Weather', icon: Cloud },
 ];
 
 interface EmotionData {
@@ -123,7 +133,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
       const fetchEmotions = async () => {
         try {
           const response = await fetch('/api/user-emotions-proxy', {
-             credentials: 'include'
+            credentials: 'include'
           });
           if (response.ok) {
             const data = await response.json();
@@ -135,20 +145,20 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
           console.error("Failed to fetch user emotions:", error);
         }
       };
-      
+
       fetchEmotions();
     }, []);
 
     const renderHighlightedText = (text: string) => {
       if (!emotionsData.length || !text) return <span>{text}</span>;
-      
+
       const sortedEmotions = [...emotionsData].sort((a, b) => b.emotion.length - a.emotion.length);
       if (sortedEmotions.length === 0) return <span>{text}</span>;
 
       const pattern = new RegExp(`\\b(${sortedEmotions.map(e => e.emotion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'gi');
-      
+
       const parts = text.split(pattern);
-      
+
       return (
         <>
           {parts.map((part, i) => {
@@ -160,19 +170,19 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
               const midX = textWidth * 0.5;
               const midY = 3;
               return (
-                <span key={i} className="relative inline-block" style={{ paddingLeft: '2px', paddingRight: '2px' }}>
+                <span key={i} className="relative inline-block">
                   <span className="text-white relative z-10">{part}</span>
                   <motion.svg
                     className="absolute bottom-0 left-0 pointer-events-none"
                     width={textWidth}
                     height="12"
-                    style={{ overflow: 'visible', marginBottom: '-3px' }}
+                    style={{ overflow: 'visible', marginBottom: '4px' }}
                     viewBox={`0 0 ${textWidth} 12`}
                   >
                     <motion.path
-                      d={`M 0 8 Q ${midX} ${midY} ${textWidth} 8`}
+                      d={`M -4 6 C -4 -16 ${textWidth + 4} -16 ${textWidth + 4} 6 C ${textWidth + 4} 28 -4 28 -4 6`}
                       fill="none"
-                      strokeWidth="3"
+                      strokeWidth="2"
                       stroke="white"
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -180,7 +190,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                       initial={{ pathLength: 0, opacity: 0 }}
                       animate={{ pathLength: 1, opacity: 0.9 }}
                       transition={{
-                        pathLength: { duration: 0.6, ease: [0.43, 0.13, 0.23, 0.96] },
+                        pathLength: { duration: 0.8, ease: "easeInOut" },
                         opacity: { duration: 0.3 }
                       }}
                     />
@@ -195,12 +205,12 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     };
 
     const detectedEmotion = React.useMemo(() => {
-       if (!value) return null;
-       // Find the last typed emotion to show its definition
-       // Or find all? Just showing one is cleaner.
-       // Let's find the longest match
-       const sortedEmotions = [...emotionsData].sort((a, b) => b.emotion.length - a.emotion.length);
-       return sortedEmotions.find(e => new RegExp(`\\b${e.emotion}\\b`, 'i').test(value));
+      if (!value) return null;
+      // Find the last typed emotion to show its definition
+      // Or find all? Just showing one is cleaner.
+      // Let's find the longest match
+      const sortedEmotions = [...emotionsData].sort((a, b) => b.emotion.length - a.emotion.length);
+      return sortedEmotions.find(e => new RegExp(`\\b${e.emotion}\\b`, 'i').test(value));
     }, [value, emotionsData]);
 
     const { adjustHeight } = useAutoResizeTextarea({
@@ -226,6 +236,17 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
     };
 
     const handleSubmit = async () => {
+      // Allow submit for discover tool even without message
+      if (selectedTool === 'discover') {
+        const messageValue = ""; // Empty message for discover
+        const tool = selectedTool;
+        setValue("");
+        setSelectedTool(null);
+        adjustHeight(true);
+        await onSubmit?.(messageValue, tool);
+        return;
+      }
+      
       if (!value.trim() || submitted) return;
       const messageValue = value;
       const tool = selectedTool;
@@ -237,17 +258,17 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
 
     const hasValue = value.trim().length > 0;
     // Handle genre and emotion selections - extract the base tool ID
-    const baseToolId = selectedTool?.startsWith('genre-') ? 'genres' 
-      : selectedTool?.startsWith('emotion-') ? 'emotion' 
-      : selectedTool;
+    const baseToolId = selectedTool?.startsWith('genre-') ? 'genres'
+      : selectedTool?.startsWith('emotion-') ? 'emotion'
+        : selectedTool;
     const activeTool = baseToolId ? toolsList.find(t => t.id === baseToolId) : null;
     const ActiveToolIcon = activeTool?.icon;
     // Get the selected genre name if a genre is selected
-    const selectedGenre = selectedTool?.startsWith('genre-') 
+    const selectedGenre = selectedTool?.startsWith('genre-')
       ? genresList.find(g => g.toLowerCase() === selectedTool.replace('genre-', ''))
       : null;
     // Get the selected emotion name if an emotion is selected
-    const selectedEmotion = selectedTool?.startsWith('emotion-') 
+    const selectedEmotion = selectedTool?.startsWith('emotion-')
       ? emotionsData.find(e => e.emotion.toLowerCase() === selectedTool.replace('emotion-', ''))?.emotion
       : null;
 
@@ -261,14 +282,14 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
         <div className="relative">
           {/* Overlay for highlighting emotion terms - only show when there's text */}
           {value && (
-            <div 
+            <div
               aria-hidden="true"
               className={cn(
                 "absolute inset-0 w-full bg-transparent p-3 pointer-events-none",
                 "whitespace-pre-wrap wrap-break-word overflow-hidden",
                 "text-sm leading-normal font-sans text-white"
               )}
-              style={{ 
+              style={{
                 minHeight: '48px',
                 wordBreak: 'break-word'
               }}
@@ -276,7 +297,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
               {renderHighlightedText(value)}
             </div>
           )}
-          
+
           <textarea
             ref={internalTextareaRef}
             rows={1}
@@ -290,20 +311,20 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
             }}
             placeholder=""
             disabled={submitted}
-              className={cn(
-                "relative z-10 w-full resize-none border-0 bg-transparent p-3",
-                "placeholder:text-white/50 focus:ring-0 focus-visible:outline-none",
-                "min-h-12 no-scrollbar",
-                "text-sm leading-normal font-sans"
-              )}
-            style={{ 
+            className={cn(
+              "relative z-10 w-full resize-none border-0 bg-transparent p-3",
+              "placeholder:text-white/50 focus:ring-0 focus-visible:outline-none",
+              "min-h-12 no-scrollbar",
+              "text-sm leading-normal font-sans"
+            )}
+            style={{
               color: value ? 'transparent' : 'inherit',
               caretColor: 'white'
             }}
             {...props}
           />
           {!value && !submitted && (
-            <div className="absolute inset-0 flex items-center pl-3 pr-10 py-3 pointer-events-none">
+            <div className="absolute inset-0 flex items-start pl-3 pr-10 pt-[14px] pointer-events-none">
               <Typewriter
                 text={[
                   "Create a playlist for a late night drive through the city",
@@ -362,40 +383,49 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                 </Tooltip>
                 <PopoverContent side="top" align="start" className="relative">
                   {!showEmotionSubmenu && !showGenresSubmenu ? (
-                  <div className="flex flex-col gap-1">
-                    {toolsList.map((tool) => {
-                      const Icon = tool.icon;
-                      return (
-                        <button
-                          key={tool.id}
-                          onClick={() => {
+                    <div className="flex flex-col gap-1">
+                      {toolsList.map((tool) => {
+                        const Icon = tool.icon;
+                        return (
+                          <button
+                            key={tool.id}
+                            onClick={async () => {
                               if (tool.id === 'emotion' && tool.hasSubmenu) {
                                 setShowEmotionSubmenu(true);
                               } else if (tool.id === 'genres' && tool.hasSubmenu) {
                                 setShowGenresSubmenu(true);
                               } else {
-                            setSelectedTool(tool.id);
-                            setIsPopoverOpen(false);
+                                // Auto-submit for discover tool before closing popover
+                                if (tool.id === 'discover') {
+                                  setIsPopoverOpen(false);
+                                  // Submit with discover tool and empty message
+                                  setValue("");
+                                  adjustHeight(true);
+                                  await onSubmit?.("", tool.id);
+                                } else {
+                                  setSelectedTool(tool.id);
+                                  setIsPopoverOpen(false);
+                                }
                               }
-                          }}
-                          className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
-                        >
-                          <Icon className="h-4 w-4" />
-                          <span>{tool.name}</span>
+                            }}
+                            className="flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <Icon className="h-4 w-4" />
+                            <span>{tool.name}</span>
                             {tool.hasSubmenu && (
                               <ChevronRight className="h-4 w-4 ml-auto" />
                             )}
-                            {'extra' in tool && tool.extra && (
-                            <span className="ml-auto text-xs text-white/50">
-                              {tool.extra}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                            {tool.extra && (
+                              <span className="ml-auto text-xs text-white/50">
+                                {tool.extra}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : showEmotionSubmenu ? (
-                    <div className="flex flex-col gap-1 w-48">
+                    <div className="flex flex-col gap-1">
                       <button
                         onClick={() => setShowEmotionSubmenu(false)}
                         className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors mb-1"
@@ -406,10 +436,10 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                       <div className="h-px bg-white/10 my-1" />
                       <div className="max-h-48 overflow-y-auto genres-scrollbar">
                         {emotionsData.length === 0 ? (
-                           <div className="p-3 text-center">
-                             <p className="text-[10px] text-white/40 mb-2">No custom emotions found.</p>
-                             <p className="text-[10px] text-white/40">Add them in Personal settings.</p>
-                           </div>
+                          <div className="p-3 text-center">
+                            <p className="text-[10px] text-white/40 mb-2">No custom emotions found.</p>
+                            <p className="text-[10px] text-white/40">Add them in Personal settings.</p>
+                          </div>
                         ) : (
                           emotionsData.map((e) => (
                             <button
@@ -433,7 +463,7 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-col gap-1 w-48">
+                    <div className="flex flex-col gap-1">
                       <button
                         onClick={() => setShowGenresSubmenu(false)}
                         className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-xs text-white hover:bg-white/10 transition-colors mb-1"
@@ -471,9 +501,9 @@ export const ChatGPTPromptInput = React.forwardRef<HTMLTextAreaElement, ChatGPTP
                     className="flex h-8 items-center gap-2 rounded-full px-2 text-sm text-white hover:bg-white/10 cursor-pointer transition-colors"
                   >
                     {ActiveToolIcon && <ActiveToolIcon className="h-4 w-4" />}
-                    {selectedEmotion ? `${activeTool.shortName}: ${selectedEmotion}` 
-                      : selectedGenre ? `${activeTool.shortName}: ${selectedGenre}` 
-                      : activeTool.shortName}
+                    {selectedEmotion ? `${activeTool.shortName}: ${selectedEmotion}`
+                      : selectedGenre ? `${activeTool.shortName}: ${selectedGenre}`
+                        : activeTool.shortName}
                     <X className="h-4 w-4" />
                   </button>
                 </>

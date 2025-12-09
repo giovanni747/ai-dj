@@ -180,7 +180,7 @@ export default function AILoadingState() {
     useEffect(() => {
         // Initialize on mount or reset when sequence changes
         const shouldReset = isInitialMountRef.current || prevSequenceIndexRef.current !== sequenceIndex;
-        
+
         if (shouldReset) {
             isInitialMountRef.current = false;
             prevSequenceIndexRef.current = sequenceIndex;
@@ -245,9 +245,9 @@ export default function AILoadingState() {
     }, [scrollPosition]);
 
     return (
-        <div className="flex items-center justify-center min-h-full w-full">
+        <div className="w-full max-w-[300px]">
             <div className="space-y-4 w-auto">
-                <div className="ml-2 flex items-center space-x-2 text-gray-600 dark:text-gray-300 font-medium">
+                <div className="flex items-center space-x-2 text-gray-600 dark:text-gray-300 font-medium">
                     <LoadingAnimation
                         progress={(sequenceIndex / TASK_SEQUENCES.length) * 100}
                     />

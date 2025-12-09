@@ -62,7 +62,7 @@ export const config = {
 
   // App Configuration
   app: {
-    name: 'AI DJ',
+    name: 'Musify',
     version: '1.0.0',
     environment: process.env.NODE_ENV || 'development',
     port: process.env.PORT || 3000,
