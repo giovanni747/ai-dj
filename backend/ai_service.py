@@ -102,6 +102,9 @@ IMPORTANT FOR DISCOVER MODE:
 - Recommend songs that align with their listening history and preferences
 - Look for patterns in their top artists and genres
 - Match the energy, danceability, and mood (valence) of their profile
+- PRIORITIZE DIVERSITY: Recommend songs from DIFFERENT artists (avoid multiple songs from the same artist)
+- Mix genres, eras, and styles within their taste profile
+- Include both familiar artists and similar artists they might not know yet
 - Do NOT use any specific request from the user - only use their profile data
 - Only recommend songs that actually exist on Spotify (popular, well-known songs)
 - Use "songs" (not "recommendations") as the key for the array
@@ -133,7 +136,10 @@ IMPORTANT:
 - Only recommend songs that actually exist on Spotify (popular, well-known songs)
 - Match the user's request AND their music taste
 - Ensure songs are relevant to what they asked for
-- Provide variety in your recommendations
+- PRIORITIZE DIVERSITY: Recommend songs from DIFFERENT artists when possible (avoid recommending multiple songs from the same artist)
+- Mix genres, eras, and styles while staying true to the user's taste and request
+- Include both familiar favorites and new discoveries
+- Vary the energy levels and moods across the playlist
 - The intro should be 3-5 sentences long and engaging
 - Escape all quotes in the intro text using backslashes (e.g., use \\" for quotes inside strings)
 - Return ONLY valid JSON, no other text, no markdown code blocks"""

@@ -133,9 +133,9 @@ if not client_id_env or not client_secret_env:
 client_id = client_id_env.strip()  # Remove any whitespace
 client_secret = client_secret_env.strip()
 # Redirect URI - must match EXACTLY what's set in Spotify Developer Dashboard
-# Use environment variable if set, otherwise default to 127.0.0.1
+# Use environment variable if set, otherwise default to localhost (better Safari compatibility)
 redirect_url = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5001/callback")
-nextjs_url = "http://127.0.0.1:3000"  # Next.js frontend URL
+nextjs_url = os.getenv("NEXTJS_URL", "http://localhost:3000")  # Next.js frontend URL
 
 scope = 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played playlist-modify-public playlist-modify-private'
 
@@ -1401,28 +1401,30 @@ def dj_recommend():
         except Exception as e:
             print(f"⚠️  Could not get Clerk user ID: {e}")
         
-        # Get ALL previously recommended tracks to avoid duplicates (not just similar prompts)
+        # Get previously recommended tracks to avoid duplicates (RELAXED filtering)
         previously_recommended_track_ids = set()
         if chat_db and clerk_id:
             try:
-                # Get tracks from similar prompts (lower threshold to catch more)
+                # Get tracks from very similar prompts only (higher threshold = more strict)
                 similar_tracks = chat_db.get_previously_recommended_tracks(
                     user_id=clerk_id,
                     user_message=user_message,
-                    similarity_threshold=0.3  # Lower threshold to catch more similar prompts
+                    similarity_threshold=0.8,  # Higher threshold = only very similar prompts
+                    days_limit=3  # Only exclude tracks from last 3 days
                 )
                 previously_recommended_track_ids.update(similar_tracks)
                 
-                # Also get ALL recently recommended tracks (last 50 messages) regardless of similarity
-                # This ensures we don't repeat tracks even if prompts are different
+                # Also get recently recommended tracks but with reduced limit
+                # Only check last 15 messages and only from last 3 days
                 all_recent_tracks = chat_db.get_all_recently_recommended_tracks(
                     user_id=clerk_id,
-                    limit=50  # Check last 50 assistant messages
+                    limit=15,  # Reduced from 50 to 15
+                    days_limit=3  # Only last 3 days
                 )
                 previously_recommended_track_ids.update(all_recent_tracks)
                 
                 if len(previously_recommended_track_ids) > 0:
-                    print(f"🚫 Excluding {len(previously_recommended_track_ids)} previously recommended tracks to prevent duplicates")
+                    print(f"🚫 Excluding {len(previously_recommended_track_ids)} recently recommended tracks (last 3 days)")
             except Exception as e:
                 print(f"⚠️  Could not load previously recommended tracks: {e}")
                 # Continue without duplicate prevention

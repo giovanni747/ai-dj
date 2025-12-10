@@ -693,6 +693,12 @@ export function AIInputWithLoadingDemo({
           const tracksWithExplanations = data.tracks.filter((t: SpotifyTrack) => t.lyrics_explanation);
           console.log(`📝 Lyrics available: ${tracksWithLyrics.length}/${data.tracks.length}`);
           console.log(`💡 Explanations available: ${tracksWithExplanations.length}/${data.tracks.length}`);
+          
+          // Debug: Log lyrics scores
+          console.log('📊 Lyrics scores received:');
+          data.tracks.forEach((t: SpotifyTrack) => {
+            console.log(`  ${t.name}: ${t.lyrics_score || 'undefined'}/5`);
+          });
         }
 
         // Add user message
@@ -776,7 +782,8 @@ export function AIInputWithLoadingDemo({
 
   // Handle Spotify connect button click
   const handleSpotifyConnect = () => {
-    window.location.href = 'http://127.0.0.1:5001/';
+    // Use localhost instead of 127.0.0.1 for better Safari compatibility
+    window.location.href = 'http://localhost:5001/';
   };
 
   return (

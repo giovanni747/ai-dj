@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 
 // This is your Flask backend's URL
-const FLASK_BACKEND_URL = 'http://127.0.0.1:5001/get_user';
+// Use localhost instead of 127.0.0.1 for better Safari compatibility
+const FLASK_BACKEND_URL = 'http://localhost:5001/get_user';
 
 export async function GET(request: Request) {
   // 1. Get the cookie store - cookies() is async in Next.js 16+

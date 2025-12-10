@@ -24,7 +24,7 @@ if (missingVars.length > 0 && process.env.NODE_ENV !== 'test') {
 export const config = {
   // API Configuration
   api: {
-    flask: process.env.FLASK_URL || 'http://127.0.0.1:5001',
+    flask: process.env.FLASK_URL || 'http://localhost:5001',
     timeout: 30000,
     retries: 3,
   },
@@ -33,7 +33,7 @@ export const config = {
   spotify: {
     clientId: process.env.CLIENT_ID || '',
     clientSecret: process.env.CLIENT_SECRET || '',
-    redirectUri: process.env.REDIRECT_URI || 'http://127.0.0.1:5001/callback',
+    redirectUri: process.env.REDIRECT_URI || 'http://localhost:5001/callback',
     scope: 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-top-read user-read-recently-played playlist-modify-public playlist-modify-private',
   },
 

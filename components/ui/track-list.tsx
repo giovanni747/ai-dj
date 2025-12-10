@@ -423,19 +423,27 @@ export function TrackList({ tracks, className = "", likedTracks = new Set(), onT
                         
                         // Apply highlighting based on which version is shown
                         if (showingTranslated && track.lyrics) {
-                          // Highlight English (translated) lyrics
+                          // Showing English (translated) lyrics
                           return highlightLyricsTerms(
                             lyricsToShow,
                             track.highlighted_terms || [],
                             frequentlyLikedTerms
                           );
                         } else if (!showingTranslated && track.lyrics_original) {
-                          // Highlight original language lyrics with original terms
-                        return highlightLyricsTerms(
-                          lyricsToShow,
+                          // Showing original non-English lyrics
+                          return highlightLyricsTerms(
+                            lyricsToShow,
                             track.highlighted_terms_original || [],
-                          frequentlyLikedTerms
-                        );
+                            frequentlyLikedTerms
+                          );
+                        } else if (!track.lyrics_original && track.lyrics) {
+                          // English original songs (no translation needed)
+                          // Use highlighted_terms for English originals
+                          return highlightLyricsTerms(
+                            lyricsToShow,
+                            track.highlighted_terms || [],
+                            frequentlyLikedTerms
+                          );
                         }
                         
                         // Fallback: show plain text if no highlighting available

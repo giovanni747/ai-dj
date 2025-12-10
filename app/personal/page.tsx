@@ -8,6 +8,7 @@ import { TrackList } from "@/components/ui/track-list";
 import { DragCards } from "@/components/ui/drag-cards";
 import type { SpotifyTrack } from "@/types";
 import { motion } from "framer-motion";
+import { Music } from "lucide-react";
 
 interface LikedTrack {
   id: number;
@@ -23,6 +24,8 @@ export default function PersonalPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [likedTrackIds, setLikedTrackIds] = useState<Set<string>>(new Set());
+  const [unlikedTrack, setUnlikedTrack] = useState<SpotifyTrack | null>(null);
+  const [undoTimeout, setUndoTimeout] = useState<NodeJS.Timeout | null>(null);
 
   const fetchLikedTracks = async () => {
     try {
@@ -84,32 +87,149 @@ export default function PersonalPage() {
     }
   };
 
+  const handleToggleLike = async (trackId: string) => {
+    try {
+      // Find the track to get its details
+      const track = likedTracks.find(t => t.id === trackId);
+      if (!track) {
+        console.error('Track not found:', trackId);
+        return;
+      }
+
+      // Call the API to toggle like (unlike in this case since it's already liked)
+      const response = await fetch('/api/track-like', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          track_id: trackId,
+          track_name: track.name,
+          track_artist: track.artist,
+          track_image_url: track.album.images?.[0]?.url || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Failed to unlike track:', errorData);
+        return;
+      }
+
+      const data = await response.json();
+      
+      // If track was unliked (liked: false), remove it from the list
+      if (data.liked === false) {
+        // Store the unliked track for undo
+        setUnlikedTrack(track);
+        
+        // Clear any existing undo timeout
+        if (undoTimeout) {
+          clearTimeout(undoTimeout);
+        }
+        
+        // Set a timeout to clear the undo option after 5 seconds
+        const timeout = setTimeout(() => {
+          setUnlikedTrack(null);
+        }, 5000);
+        setUndoTimeout(timeout);
+        
+        setLikedTracks(prevTracks => {
+          const updated = prevTracks.filter(t => t.id !== trackId);
+          // Update positions
+          return updated.map((t, index) => ({
+            ...t,
+            position: index + 1,
+          }));
+        });
+        setLikedTrackIds(prev => {
+          const updated = new Set(prev);
+          updated.delete(trackId);
+          return updated;
+        });
+        console.log('✅ Track removed from liked songs');
+      }
+    } catch (err) {
+      console.error('❌ Error toggling like:', err);
+    }
+  };
+
+  const handleUndoUnlike = async () => {
+    if (!unlikedTrack) return;
+
+    try {
+      // Re-like the track
+      const response = await fetch('/api/track-like', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          track_id: unlikedTrack.id,
+          track_name: unlikedTrack.name,
+          track_artist: unlikedTrack.artist,
+          track_image_url: unlikedTrack.album.images?.[0]?.url || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Failed to re-like track:', errorData);
+        return;
+      }
+
+      const data = await response.json();
+      
+      // If track was re-liked (liked: true), add it back to the list
+      if (data.liked === true) {
+        setLikedTracks(prevTracks => {
+          // Add the track back at its original position (or at the end)
+          const updated = [...prevTracks, unlikedTrack];
+          // Update positions
+          return updated.map((t, index) => ({
+            ...t,
+            position: index + 1,
+          }));
+        });
+        setLikedTrackIds(prev => {
+          const updated = new Set(prev);
+          updated.add(unlikedTrack.id);
+          return updated;
+        });
+        
+        // Clear undo state
+        setUnlikedTrack(null);
+        if (undoTimeout) {
+          clearTimeout(undoTimeout);
+          setUndoTimeout(null);
+        }
+        
+        console.log('✅ Track re-added to liked songs');
+      }
+    } catch (err) {
+      console.error('❌ Error re-liking track:', err);
+    }
+  };
+
   useEffect(() => {
     fetchLikedTracks();
   }, []);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (undoTimeout) {
+        clearTimeout(undoTimeout);
+      }
+    };
+  }, [undoTimeout]);
 
   return (
     <div className="relative min-h-screen">
       {/* Hero background */}
       <HeroWave showOverlay={false} />
-      
-      {/* User button in top right when signed in */}
-      <SignedIn>
-        <div className="fixed top-4 right-4 z-50 pointer-events-auto">
-          <UserButton afterSignOutUrl="/" />
-        </div>
-      </SignedIn>
-      
-      {/* Sign In button in top right when signed out */}
-      <SignedOut>
-        <div className="fixed top-4 right-4 z-50 pointer-events-auto">
-          <SignInButton mode="modal">
-            <button className="bg-white hover:bg-gray-100 text-black font-medium px-4 py-2 rounded-full transition-colors shadow-lg text-sm">
-              Sign In
-            </button>
-          </SignInButton>
-        </div>
-      </SignedOut>
 
       {/* Main content - matching welcome page structure */}
       <div className="relative z-10 min-h-screen p-2">
@@ -127,11 +247,62 @@ export default function PersonalPage() {
             <div className="absolute inset-0 no-scrollbar overflow-y-auto z-0">
               <div className="pt-[10vh] pb-20 flex flex-col justify-start min-h-full">
                 <div className="max-w-4xl w-full mx-auto flex flex-col gap-8 px-4 md:px-12">
+                  {/* Undo Notification */}
+                  {unlikedTrack && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
+                      className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50"
+                    >
+                      <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl px-6 py-4 shadow-2xl flex items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded overflow-hidden bg-white/5">
+                            {unlikedTrack.album.images?.[0]?.url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={unlikedTrack.album.images[0].url}
+                                alt={unlikedTrack.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-white/40">
+                                <Music className="w-5 h-5" />
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-white">
+                              Removed "{unlikedTrack.name}"
+                            </p>
+                            <p className="text-xs text-white/60">
+                              by {unlikedTrack.artist}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleUndoUnlike}
+                          className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap"
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+
                   {/* Header - matching welcome page style */}
                   <div className="text-center space-y-3 mt-0">
-                    <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
-                      Your Liked Songs
-                    </h1>
+                    <div className="flex items-center justify-center gap-4">
+                      <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight">
+                        Your Liked Songs
+                      </h1>
+                      {/* User Button for logout and account management */}
+                      <SignedIn>
+                        <div className="pointer-events-auto">
+                          <UserButton afterSignOutUrl="/" />
+                        </div>
+                      </SignedIn>
+                    </div>
                     <p className="text-base text-white/60 max-w-md mx-auto">
                       {loading ? 'Loading...' : `${likedTracks.length} ${likedTracks.length === 1 ? 'song' : 'songs'} in your collection`}
                     </p>
@@ -183,11 +354,12 @@ export default function PersonalPage() {
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ duration: 0.5, delay: 0.2 }}
-                          className="w-full mt-8"
+                          className="w-full mt-8 p-6 rounded-3xl bg-gray-800/40 backdrop-blur-xl border border-white/10 shadow-xl"
                         >
                           <TrackList
                             tracks={likedTracks}
                             likedTracks={likedTrackIds}
+                            onToggleLike={handleToggleLike}
                           />
                         </motion.div>
                       </div>

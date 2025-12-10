@@ -557,7 +557,7 @@ class ChatDatabase:
             traceback.print_exc()
             return set()
     
-    def get_previously_recommended_tracks(self, user_id, user_message, similarity_threshold=0.7):
+    def get_previously_recommended_tracks(self, user_id, user_message, similarity_threshold=0.7, days_limit=None):
         """
         Get track IDs that were previously recommended for similar prompts
         
@@ -565,6 +565,7 @@ class ChatDatabase:
             user_id: Clerk user ID
             user_message: Current user message to compare against
             similarity_threshold: Minimum similarity score (0.0-1.0) to consider prompts similar (default: 0.7)
+            days_limit: Only consider tracks from the last N days (default: None for all time)
         
         Returns:
             Set of track IDs that were previously recommended for similar prompts
@@ -572,9 +573,14 @@ class ChatDatabase:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Build query with optional time filter
+                    time_filter = ""
+                    if days_limit:
+                        time_filter = f"AND a.created_at > NOW() - INTERVAL '{days_limit} days'"
+                    
                     # Get all assistant messages with tracks and their preceding user messages
                     # Match each assistant message with the most recent user message before it
-                    cur.execute('''
+                    query = f'''
                         SELECT 
                             u.content as user_msg_content,
                             a.tracks as assistant_tracks
@@ -593,9 +599,11 @@ class ChatDatabase:
                         AND a.role = 'assistant'
                         AND a.tracks IS NOT NULL
                         AND jsonb_array_length(a.tracks) > 0
+                        {time_filter}
                         ORDER BY a.created_at DESC
                         LIMIT 50
-                    ''', (user_id, user_id))
+                    '''
+                    cur.execute(query, (user_id, user_id))
                     
                     rows = cur.fetchall()
                     
@@ -682,7 +690,7 @@ class ChatDatabase:
             traceback.print_exc()
             return set()
 
-    def get_all_recently_recommended_tracks(self, user_id, limit=50):
+    def get_all_recently_recommended_tracks(self, user_id, limit=50, days_limit=None):
         """
         Get ALL track IDs that were recently recommended (regardless of prompt similarity)
         This helps prevent duplicates even when prompts are different.
@@ -690,6 +698,7 @@ class ChatDatabase:
         Args:
             user_id: Clerk user ID
             limit: Number of recent assistant messages to check (default: 50)
+            days_limit: Only consider tracks from the last N days (default: None for all time)
         
         Returns:
             Set of track IDs that were recently recommended
@@ -697,17 +706,24 @@ class ChatDatabase:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Build query with optional time filter
+                    time_filter = ""
+                    if days_limit:
+                        time_filter = f"AND created_at > NOW() - INTERVAL '{days_limit} days'"
+                    
                     # Get all recent assistant messages with tracks
-                    cur.execute('''
+                    query = f'''
                         SELECT tracks
                         FROM chat_messages
                         WHERE clerk_id = %s
                         AND role = 'assistant'
                         AND tracks IS NOT NULL
                         AND jsonb_array_length(tracks) > 0
+                        {time_filter}
                         ORDER BY created_at DESC
                         LIMIT %s
-                    ''', (user_id, limit))
+                    '''
+                    cur.execute(query, (user_id, limit))
                     
                     rows = cur.fetchall()
                     
